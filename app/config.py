@@ -1,4 +1,5 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import ValidationError
 
 
 class Settings(BaseSettings):
@@ -16,9 +17,14 @@ class Settings(BaseSettings):
     whatsapp_app_secret: str = ""
     port: int = 8000
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-settings = Settings()
+try:
+    settings = Settings()
+except ValidationError as e:
+    missing = [err["loc"][0] for err in e.errors() if err["type"] == "missing"]
+    raise RuntimeError(
+        f"Missing required environment variables: {missing}. "
+        "Check your .env file or Railway environment settings."
+    ) from e

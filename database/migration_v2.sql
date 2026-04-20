@@ -18,13 +18,13 @@ CREATE TABLE IF NOT EXISTS followup_jobs (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id      UUID REFERENCES leads(id) ON DELETE CASCADE,
   tenant_id    UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  channel      TEXT NOT NULL,
+  channel      TEXT NOT NULL CHECK (channel IN ('whatsapp', 'instagram')),
   phone        TEXT,
   ig_user_id   TEXT,
-  job_type     TEXT NOT NULL,
+  job_type     TEXT NOT NULL CHECK (job_type IN ('appointment_reminder', 'payment_recovery', 'pos_venda')),
   scheduled_at TIMESTAMPTZ NOT NULL,
   executed_at  TIMESTAMPTZ,
-  status       TEXT DEFAULT 'pending',
+  status       TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'failed')),
   payload      JSONB DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_followup_pending ON followup_jobs(scheduled_at)
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS consent_log (
   lead_id      UUID REFERENCES leads(id) ON DELETE CASCADE,
   tenant_id    UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   channel      TEXT,
-  consent_text TEXT,
+  consent_text TEXT NOT NULL,
   consented_at TIMESTAMPTZ DEFAULT NOW()
 );
 
