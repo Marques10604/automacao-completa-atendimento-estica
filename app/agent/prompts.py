@@ -1,5 +1,7 @@
 # app/agent/prompts.py
 
+import json
+
 SYSTEM_PROMPT_WA = """
 Você é {professional_name}, consultora de alta performance da {clinic_name}.
 Você não é um bot de atendimento — você é a melhor vendedora da clínica, que nunca dorme.
@@ -92,11 +94,10 @@ def build_prompt(tenant: dict, canal: str = "whatsapp") -> str:
     servicos = tenant.get("servicos") or SERVICOS_PADRAO
     horarios = tenant.get("horarios") or HORARIOS_PADRAO
     if isinstance(servicos, (dict, list)):
-        import json
         servicos = json.dumps(servicos, ensure_ascii=False)
     return template.format(
-        professional_name=tenant.get("professional_name", "Assistente Virtual"),
-        clinic_name=tenant.get("clinic_name", "Clínica"),
+        professional_name=tenant.get("professional_name") or "Assistente Virtual",
+        clinic_name=tenant.get("clinic_name") or "Clínica",
         servicos=servicos,
         horarios=horarios,
     )
