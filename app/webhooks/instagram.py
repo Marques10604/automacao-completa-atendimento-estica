@@ -3,12 +3,15 @@
 
 # app/webhooks/instagram.py
 import json
+import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 import memory as mem
 from app.agent.claude_client import processar_mensagem
 from app.agent.dispatcher import send_message
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -40,27 +43,31 @@ async def instagram_webhook(request: Request):
     if not tenant:
         return JSONResponse(status_code=404, content={"status": "erro", "motivo": f"Tenant não encontrado para page_id={page_id}"})
 
-    resultado = await processar_mensagem(
-        tenant=tenant,
-        phone="",
-        mensagem_usuario=mensagem,
-        canal="instagram",
-        ig_user_id=ig_user_id,
-    )
+    try:
+        resultado = await processar_mensagem(
+            tenant=tenant,
+            phone="",
+            mensagem_usuario=mensagem,
+            canal="instagram",
+            ig_user_id=ig_user_id,
+        )
+        resposta_texto = resultado.get("response", "")
+    except Exception as e:
+        logger.error("Erro ao processar mensagem IG para %s: %s", ig_user_id, e)
+        return JSONResponse(content={"status": "erro_interno"})
 
     try:
         await send_message(
             channel="instagram",
             phone="",
             ig_user_id=ig_user_id,
-            text=resultado["response"],
+            text=resposta_texto,
             tenant=tenant,
         )
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error("Falha ao enviar resposta IG para %s: %s", ig_user_id, e)
+        logger.error("Falha ao enviar resposta IG para %s: %s", ig_user_id, e)
 
-    return JSONResponse(content={"status": "ok", "ig_user_id": ig_user_id})
+    return JSONResponse(content={"status": "ok"})
 
 
 def _extrair_mensagem_instagram(body: dict) -> tuple[str, str, str]:
