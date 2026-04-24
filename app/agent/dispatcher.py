@@ -25,9 +25,9 @@ async def send_instagram(ig_user_id: str, text: str, ig_access_token: str) -> No
         "recipient": {"id": ig_user_id},
         "message": {"text": text},
     }
-    params = {"access_token": ig_access_token}
+    headers = {"Authorization": f"Bearer {ig_access_token}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(url, json=payload, params=params)
+        r = await client.post(url, json=payload, headers=headers)
         r.raise_for_status()
 
 

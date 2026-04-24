@@ -2,8 +2,11 @@
 
 import hashlib
 import hmac
+import logging
 import os
 from fastapi import FastAPI, Header, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -144,13 +147,16 @@ async def webhook_whatsapp(request: Request):
         mensagem_usuario=mensagem,
     )
 
-    await send_message(
-        channel="whatsapp",
-        phone=phone,
-        ig_user_id="",
-        text=resultado["response"],
-        tenant=tenant,
-    )
+    try:
+        await send_message(
+            channel="whatsapp",
+            phone=phone,
+            ig_user_id="",
+            text=resultado["response"],
+            tenant=tenant,
+        )
+    except Exception as e:
+        logger.error("Falha ao enviar resposta WA para %s: %s", phone, e)
 
     return JSONResponse(content={"status": "ok", "phone": phone, **resultado})
 
