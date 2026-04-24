@@ -251,14 +251,29 @@ async def payment_confirm(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload inválido")
 
+    # Verifica token Asaas (configurado no painel Asaas como "Access Token")
+    asaas_token = request.headers.get("asaas-access-token", "")
+    expected_token = ADMIN_API_KEY  # reutiliza ADMIN_API_KEY como token do webhook Asaas
+    if expected_token and asaas_token != expected_token:
+        raise HTTPException(status_code=403, detail="Token inválido")
+
     event = body.get("event", "")
-    payment = body.get("payment", {})
+    payment = body.get("payment")
+
+    # Guard: payment deve ser um dict
+    if not isinstance(payment, dict):
+        return JSONResponse(content={"status": "ignorado", "motivo": "payment ausente ou inválido"})
 
     # Asaas envia PAYMENT_RECEIVED ou PAYMENT_CONFIRMED para Pix confirmado
     if event not in ("PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"):
         return JSONResponse(content={"status": "ignorado", "event": event})
 
     payment_id = payment.get("id", "")
+
+    # Guard: payment_id não pode ser vazio
+    if not payment_id:
+        return JSONResponse(content={"status": "ignorado", "motivo": "payment_id ausente"})
+
     # Busca lead pelo payment_id salvo no payload do followup_job
     sb = mem.get_client()
     jobs = (
@@ -275,22 +290,24 @@ async def payment_confirm(request: Request):
     job = jobs[0]
     lead_id = job["lead_id"]
 
-    # Atualiza status do lead para fechado
-    sb.table("leads").update({"status": "fechado"}).eq("id", lead_id).execute()
+    try:
+        agora = datetime.now(timezone.utc)
+        sb.table("followup_jobs").insert({
+            "lead_id":      lead_id,
+            "tenant_id":    job["tenant_id"],
+            "channel":      job["channel"],
+            "phone":        job.get("phone", ""),
+            "ig_user_id":   job.get("ig_user_id", ""),
+            "job_type":     "pos_venda",
+            "scheduled_at": (agora + timedelta(days=1)).isoformat(),
+            "status":       "pending",
+            "payload":      {"payment_id": payment_id},
+        }).execute()
 
-    # Agenda job pos_venda D+1
-    agora = datetime.now(timezone.utc)
-    sb.table("followup_jobs").insert({
-        "lead_id":      lead_id,
-        "tenant_id":    job["tenant_id"],
-        "channel":      job["channel"],
-        "phone":        job.get("phone", ""),
-        "ig_user_id":   job.get("ig_user_id", ""),
-        "job_type":     "pos_venda",
-        "scheduled_at": (agora + timedelta(days=1)).isoformat(),
-        "status":       "pending",
-        "payload":      {"payment_id": payment_id},
-    }).execute()
+        sb.table("leads").update({"status": "fechado"}).eq("id", lead_id).execute()
+    except Exception as e:
+        logger.error("Erro ao processar payment_confirm para lead %s: %s", lead_id, e)
+        return JSONResponse(status_code=500, content={"status": "erro_interno"})
 
     return JSONResponse(content={"status": "ok", "lead_id": lead_id, "novo_status": "fechado"})
 
