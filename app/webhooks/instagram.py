@@ -70,7 +70,7 @@ def _extrair_mensagem_instagram(body: dict) -> tuple[str, str, str]:
         page_id = entry.get("id", "")
         messaging = entry.get("messaging", [])
         if not messaging:
-            return "", "", page_id
+            return "", "", ""
         msg = messaging[0]
         ig_user_id = msg["sender"]["id"]
         text = msg.get("message", {}).get("text", "").strip()
