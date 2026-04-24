@@ -99,10 +99,18 @@ async def execute_tool(tool_name: str, tool_input: dict, tenant: dict, phone: st
     fn = dispatch.get(tool_name)
     if not fn:
         return {"error": f"Tool desconhecida: {tool_name}"}
-    return await fn(tool_input, tenant, phone)
+    try:
+        return await fn(tool_input, tenant, phone)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Erro ao executar tool %s: %s", tool_name, e)
+        return {"error": str(e)}
 
 
 async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
+    # TODO(prod): integrar com Google Calendar ou tabela availability no Supabase
+    import logging
+    logging.getLogger(__name__).warning("_check_availability: retornando dados mock — não usar em produção")
     date = inp.get("date", "")
     time = inp.get("time", "qualquer horário")
     return {

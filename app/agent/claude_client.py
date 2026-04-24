@@ -48,7 +48,8 @@ async def processar_mensagem(
 
         if resposta.stop_reason == "end_turn":
             texto = next((b.text for b in resposta.content if hasattr(b, "text")), "")
-            mem.save_message(tenant_id, identifier, "assistant", texto)
+            if texto:  # guard: não salvar resposta vazia
+                mem.save_message(tenant_id, identifier, "assistant", texto)
             mem.update_session(tenant_id, identifier, lead.get("stage", "qualificacao"))
             return {
                 "response": texto,
@@ -69,7 +70,8 @@ async def processar_mensagem(
                         "tool_use_id": block.id,
                         "content":     str(result),
                     })
-            mensagens_api.append({"role": "user", "content": tool_results})
+            if tool_results:  # guard: não enviar content vazio à API
+                mensagens_api.append({"role": "user", "content": tool_results})
 
     return {
         "response":  "Desculpe, ocorreu um erro interno. Tente novamente.",
