@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from app.agent.claude_client import processar_mensagem
 import memory as mem
 from app.agent.dispatcher import send_message
+from app.webhooks.instagram import router as instagram_router
 
 load_dotenv()
 
@@ -26,6 +27,8 @@ app = FastAPI(
     description="Orquestrador multi-tenant com Supabase. Qualifica e agenda via WhatsApp.",
     version="2.0.0",
 )
+
+app.include_router(instagram_router)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
