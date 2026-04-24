@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import logging
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Request
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ from app.agent.claude_client import processar_mensagem
 import memory as mem
 from app.agent.dispatcher import send_message
 from app.webhooks.instagram import router as instagram_router
+from app.jobs.scheduler import get_scheduler
 
 load_dotenv()
 
@@ -22,10 +24,22 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler = get_scheduler()
+    scheduler.start()
+    logger.info("APScheduler iniciado — follow-up runner ativo")
+    yield
+    scheduler.shutdown(wait=False)
+    logger.info("APScheduler encerrado")
+
+
 app = FastAPI(
     title="Agente de Atendimento IA — Produto Real",
     description="Orquestrador multi-tenant com Supabase. Qualifica e agenda via WhatsApp.",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.include_router(instagram_router)
