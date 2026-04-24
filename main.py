@@ -226,13 +226,31 @@ async def list_leads(
     tenant = mem.get_tenant_by_name(tenant_name)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant não encontrado")
+
+    # Correção 2: Validar valores de status e canal
+    STATUS_PERMITIDOS = {"novo", "qualificado", "agendado", "fechado", "frio"}
+    CANAIS_PERMITIDOS = {"whatsapp", "instagram"}
+
+    if status and status not in STATUS_PERMITIDOS:
+        raise HTTPException(status_code=400, detail=f"status inválido. Permitidos: {sorted(STATUS_PERMITIDOS)}")
+    if canal and canal not in CANAIS_PERMITIDOS:
+        raise HTTPException(status_code=400, detail=f"canal inválido. Permitidos: {sorted(CANAIS_PERMITIDOS)}")
+
+    # Correção 3: Logging básico de acesso
+    logger.info("GET /leads tenant=%s filtros: status=%s canal=%s desde=%s", tenant_name, status, canal, desde)
+
     sb = mem.get_client()
     query = sb.table("leads").select("*").eq("tenant_id", tenant["id"])
     if status:
         query = query.eq("status", status)
     if canal:
         query = query.eq("canal", canal)
+    # Correção 1: Validar formato de desde
     if desde:
+        try:
+            datetime.fromisoformat(desde)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Parâmetro 'desde' deve ser ISO 8601 (ex: 2026-01-01 ou 2026-01-01T00:00:00)")
         query = query.gte("created_at", desde)
     result = query.order("created_at", desc=True).execute()
     return result.data or []
