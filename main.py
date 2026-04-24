@@ -6,6 +6,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, Request
 
 logger = logging.getLogger(__name__)
@@ -213,14 +214,27 @@ async def list_tenants(x_admin_key: str | None = Header(default=None)):
 
 
 @app.get("/leads/{tenant_name}")
-async def list_leads(tenant_name: str, x_admin_key: str | None = Header(default=None)):
-    """Lista leads de um tenant (admin)."""
+async def list_leads(
+    tenant_name: str,
+    status: Optional[str] = None,
+    canal: Optional[str] = None,
+    desde: Optional[str] = None,
+    x_admin_key: str | None = Header(default=None),
+):
+    """Lista leads de um tenant (admin) com filtros opcionais: status, canal, desde (ISO date)."""
     _verificar_admin(x_admin_key)
     tenant = mem.get_tenant_by_name(tenant_name)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant não encontrado")
     sb = mem.get_client()
-    result = sb.table("leads").select("*").eq("tenant_id", tenant["id"]).order("created_at", desc=True).execute()
+    query = sb.table("leads").select("*").eq("tenant_id", tenant["id"])
+    if status:
+        query = query.eq("status", status)
+    if canal:
+        query = query.eq("canal", canal)
+    if desde:
+        query = query.gte("created_at", desde)
+    result = query.order("created_at", desc=True).execute()
     return result.data or []
 
 
