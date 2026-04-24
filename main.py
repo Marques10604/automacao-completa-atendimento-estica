@@ -5,6 +5,7 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Header, HTTPException, Request
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,62 @@ async def reset_lead(tenant_name: str, phone: str, x_admin_key: str | None = Hea
     sb.table("sessions").delete().eq("tenant_id", tenant_id).eq("phone", phone).execute()
     sb.table("conversations").delete().eq("tenant_id", tenant_id).eq("phone", phone).execute()
     return {"status": "ok", "mensagem": f"Lead {phone} resetado para tenant {tenant_name}"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAYMENT CALLBACK — Asaas
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/payment/confirm")
+async def payment_confirm(request: Request):
+    """Callback Asaas — disparado quando pagamento é confirmado."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Payload inválido")
+
+    event = body.get("event", "")
+    payment = body.get("payment", {})
+
+    # Asaas envia PAYMENT_RECEIVED ou PAYMENT_CONFIRMED para Pix confirmado
+    if event not in ("PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"):
+        return JSONResponse(content={"status": "ignorado", "event": event})
+
+    payment_id = payment.get("id", "")
+    # Busca lead pelo payment_id salvo no payload do followup_job
+    sb = mem.get_client()
+    jobs = (
+        sb.table("followup_jobs")
+        .select("lead_id, tenant_id, channel, phone, ig_user_id")
+        .contains("payload", {"payment_id": payment_id})
+        .limit(1)
+        .execute()
+    ).data or []
+
+    if not jobs:
+        return JSONResponse(content={"status": "lead_nao_encontrado", "payment_id": payment_id})
+
+    job = jobs[0]
+    lead_id = job["lead_id"]
+
+    # Atualiza status do lead para fechado
+    sb.table("leads").update({"status": "fechado"}).eq("id", lead_id).execute()
+
+    # Agenda job pos_venda D+1
+    agora = datetime.now(timezone.utc)
+    sb.table("followup_jobs").insert({
+        "lead_id":      lead_id,
+        "tenant_id":    job["tenant_id"],
+        "channel":      job["channel"],
+        "phone":        job.get("phone", ""),
+        "ig_user_id":   job.get("ig_user_id", ""),
+        "job_type":     "pos_venda",
+        "scheduled_at": (agora + timedelta(days=1)).isoformat(),
+        "status":       "pending",
+        "payload":      {"payment_id": payment_id},
+    }).execute()
+
+    return JSONResponse(content={"status": "ok", "lead_id": lead_id, "novo_status": "fechado"})
 
 
 if __name__ == "__main__":
