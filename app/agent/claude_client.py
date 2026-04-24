@@ -1,4 +1,5 @@
 # app/agent/claude_client.py
+import asyncio
 import anthropic
 import memory as mem
 from app.agent.tools import TOOL_DEFINITIONS, execute_tool
@@ -31,7 +32,37 @@ async def processar_mensagem(
     lead = mem.get_or_create_lead(tenant_id, identifier, canal)
     lead_id = str(lead["id"])
 
+    # Salvar consentimento LGPD (opt-in implícito) na primeira mensagem
+    historico_count = len(mem.get_messages(tenant_id, identifier, limit=1))
+    if historico_count == 0:  # primeira mensagem — salvar opt-in implícito
+        sb = mem.get_client()
+        await asyncio.to_thread(
+            lambda: sb.table("consent_log").insert({
+                "lead_id":      lead_id,
+                "tenant_id":    tenant_id,
+                "channel":      canal,
+                "consent_text": "Opt-in implícito: lead iniciou conversa. LGPD informada na primeira mensagem.",
+            }).execute()
+        )
+
     mem.save_message(tenant_id, identifier, "user", mensagem_usuario)
+
+    # Tratar opt-out SAIR antes de chamar Claude
+    if mensagem_usuario.strip().upper() == "SAIR":
+        sb = mem.get_client()
+        await asyncio.to_thread(
+            lambda: sb.table("leads").update({"status": "frio"}).eq("id", lead_id).execute()
+        )
+        resposta_sair = "Entendido! Removemos seus dados do nosso sistema. Se quiser retornar, é só nos chamar. 💛"
+        mem.save_message(tenant_id, identifier, "assistant", resposta_sair)
+        return {
+            "response":  resposta_sair,
+            "stage":     "frio",
+            "canal":     canal,
+            "tenant_id": tenant_id,
+            "lead_id":   lead_id,
+        }
+
     historico = mem.get_messages(tenant_id, identifier)
 
     system_prompt = _get_system_prompt(tenant, canal)
