@@ -37,9 +37,9 @@ async def send_message(channel: str, phone: str, ig_user_id: str, text: str, ten
     phone_number_id = tenant.get("phone_number_id") or settings.meta_wa_phone_number_id
     ig_token = tenant.get("ig_access_token") or settings.meta_ig_access_token
 
-    if channel == "whatsapp" and phone:
+    if channel == "whatsapp":
         await send_whatsapp(phone, text, wa_token, phone_number_id)
-    elif channel == "instagram" and ig_user_id:
+    elif channel == "instagram":
         await send_instagram(ig_user_id, text, ig_token)
     else:
         raise ValueError(f"Canal inválido ou identificador ausente: channel={channel}")
