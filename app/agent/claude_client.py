@@ -1,8 +1,11 @@
 # app/agent/claude_client.py
 import asyncio
+import logging
 import anthropic
 import memory as mem
 from app.agent.tools import TOOL_DEFINITIONS, execute_tool
+
+logger = logging.getLogger(__name__)
 
 _anthropic_client = anthropic.AsyncAnthropic()
 MODELO = "claude-sonnet-4-6"
@@ -32,19 +35,7 @@ async def processar_mensagem(
     lead = mem.get_or_create_lead(tenant_id, identifier, canal)
     lead_id = str(lead["id"])
 
-    # Salvar consentimento LGPD (opt-in implícito) na primeira mensagem
-    historico_count = len(mem.get_messages(tenant_id, identifier, limit=1))
-    if historico_count == 0:  # primeira mensagem — salvar opt-in implícito
-        sb = mem.get_client()
-        await asyncio.to_thread(
-            lambda: sb.table("consent_log").insert({
-                "lead_id":      lead_id,
-                "tenant_id":    tenant_id,
-                "channel":      canal,
-                "consent_text": "Opt-in implícito: lead iniciou conversa. LGPD informada na primeira mensagem.",
-            }).execute()
-        )
-
+    # Salvar mensagem do usuário primeiro (para incluir no histórico)
     mem.save_message(tenant_id, identifier, "user", mensagem_usuario)
 
     # Tratar opt-out SAIR antes de chamar Claude
@@ -63,7 +54,24 @@ async def processar_mensagem(
             "lead_id":   lead_id,
         }
 
+    # Uma única query de histórico (já inclui a mensagem do usuário recém salva)
     historico = mem.get_messages(tenant_id, identifier)
+
+    # Salvar consentimento LGPD (opt-in implícito) na primeira mensagem
+    if len(historico) == 1:  # histórico tem só a mensagem que acabou de salvar — é a primeira
+        try:
+            sb = mem.get_client()
+            await asyncio.to_thread(
+                lambda: sb.table("consent_log").insert({
+                    "lead_id":      lead_id,
+                    "tenant_id":    tenant_id,
+                    "channel":      canal,
+                    "consent_text": "Opt-in implícito: lead iniciou conversa. LGPD informada na primeira mensagem.",
+                }).execute()
+            )
+        except Exception as e:
+            logger.error("Falha ao salvar consent_log para lead %s: %s", lead_id, e)
+            # continua — falha de consent_log não deve interromper o atendimento
 
     system_prompt = _get_system_prompt(tenant, canal)
     mensagens_api = [{"role": m["role"], "content": m["content"]} for m in historico]
@@ -104,6 +112,7 @@ async def processar_mensagem(
             if tool_results:  # guard: não enviar content vazio à API
                 mensagens_api.append({"role": "user", "content": tool_results})
 
+    logger.error("Loop tool_use esgotou 5 iterações sem end_turn para lead %s", lead_id)
     return {
         "response":  "Desculpe, ocorreu um erro interno. Tente novamente.",
         "stage":     "qualificacao",
