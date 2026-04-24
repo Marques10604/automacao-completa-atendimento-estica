@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from orchestrator import processar_mensagem
+from app.agent.claude_client import processar_mensagem
 import memory as mem
 from app.agent.dispatcher import send_message
 
