@@ -1,9 +1,9 @@
 # app/services/followup_service.py
+import asyncio
 import logging
 from datetime import datetime, timezone
 import memory as mem
 from app.agent.dispatcher import send_message
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,25 +19,34 @@ async def executar_jobs_pendentes() -> None:
     sb = mem.get_client()
     agora = datetime.now(timezone.utc).isoformat()
 
-    jobs = (
-        sb.table("followup_jobs")
-        .select("*, tenants(*)")
-        .lte("scheduled_at", agora)
-        .eq("status", "pending")
-        .execute()
-    ).data or []
+    result = await asyncio.to_thread(
+        lambda: sb.table("followup_jobs")
+            .select("*, tenants(*)")
+            .lte("scheduled_at", agora)
+            .eq("status", "pending")
+            .execute()
+    )
+    jobs = result.data or []
 
     for job in jobs:
         try:
             await _executar_job(job, sb)
         except Exception as e:
             logger.error("Falha ao executar job %s: %s", job["id"], e)
-            sb.table("followup_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
+            try:
+                await asyncio.to_thread(
+                    lambda: sb.table("followup_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
+                )
+            except Exception as update_err:
+                logger.error("Falha ao marcar job %s como failed: %s", job["id"], update_err)
 
 
 async def _executar_job(job: dict, sb) -> None:
     tenant = job.get("tenants") or {}
-    text = TEMPLATES.get(job["job_type"], "Olá! Tudo bem por aí?")
+    if not tenant:
+        logger.warning("Job %s sem tenant associado — usando credenciais globais", job["id"])
+
+    text = TEMPLATES.get(job.get("job_type"), "Olá! Tudo bem por aí?")
 
     await send_message(
         channel=job["channel"],
@@ -47,9 +56,11 @@ async def _executar_job(job: dict, sb) -> None:
         tenant=tenant,
     )
 
-    sb.table("followup_jobs").update({
-        "status": "done",
-        "executed_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", job["id"]).execute()
+    await asyncio.to_thread(
+        lambda: sb.table("followup_jobs").update({
+            "status": "done",
+            "executed_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", job["id"]).execute()
+    )
 
-    logger.info("Job %s executado: %s → %s", job["id"], job["job_type"], job.get("phone") or job.get("ig_user_id"))
+    logger.info("Job %s executado: %s → %s", job["id"], job.get("job_type"), job.get("phone") or job.get("ig_user_id"))
