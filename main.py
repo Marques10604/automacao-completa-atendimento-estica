@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from orchestrator import processar_mensagem
 import memory as mem
+from app.agent.dispatcher import send_message
 
 load_dotenv()
 
@@ -143,8 +144,13 @@ async def webhook_whatsapp(request: Request):
         mensagem_usuario=mensagem,
     )
 
-    # TODO: enviar resposta de volta via WhatsApp Cloud API
-    # await send_whatsapp(tenant, phone, resultado["response"])
+    await send_message(
+        channel="whatsapp",
+        phone=phone,
+        ig_user_id="",
+        text=resultado["response"],
+        tenant=tenant,
+    )
 
     return JSONResponse(content={"status": "ok", "phone": phone, **resultado})
 
