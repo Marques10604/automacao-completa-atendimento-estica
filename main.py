@@ -8,6 +8,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, Request
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from app.limiter import limiter
 
 logger = logging.getLogger(__name__)
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -43,6 +47,10 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(instagram_router)
 
@@ -126,6 +134,7 @@ def _validar_assinatura_meta(payload: bytes, signature_header: str) -> bool:
 
 
 @app.post("/webhook/whatsapp")
+@limiter.limit("10/minute")
 async def webhook_whatsapp(request: Request):
     """
     Recebe mensagens do WhatsApp Cloud API.

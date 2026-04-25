@@ -5,6 +5,7 @@
 import json
 import logging
 from fastapi import APIRouter, HTTPException, Request
+from app.limiter import limiter
 from fastapi.responses import PlainTextResponse, JSONResponse
 import memory as mem
 from app.agent.claude_client import processar_mensagem
@@ -27,6 +28,7 @@ async def instagram_verify(request: Request):
 
 
 @router.post("/webhook/instagram")
+@limiter.limit("10/minute")
 async def instagram_webhook(request: Request):
     """Recebe mensagens do Instagram DM via Meta Graph API."""
     try:
