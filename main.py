@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -144,12 +144,41 @@ def _validar_assinatura_meta(payload: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(expected, signature_header[7:])
 
 
+async def _processar_e_responder_whatsapp(tenant: dict, phone: str, mensagem: str) -> None:
+    """Roda em background (após o 200 já ter sido devolvido pra Meta): processa a
+    mensagem com a Claude e envia a resposta pelo WhatsApp."""
+    try:
+        resultado = await processar_mensagem(
+            tenant=tenant,
+            phone=phone,
+            mensagem_usuario=mensagem,
+        )
+    except Exception as e:
+        logger.error("Falha ao processar mensagem WA de %s: %s", phone, e)
+        return
+
+    try:
+        await send_message(
+            channel="whatsapp",
+            phone=phone,
+            ig_user_id="",
+            text=resultado["response"],
+            tenant=tenant,
+        )
+    except Exception as e:
+        logger.error("Falha ao enviar resposta WA para %s: %s", phone, e)
+
+
 @app.post("/webhook/whatsapp")
 @limiter.limit("10/minute")
-async def webhook_whatsapp(request: Request):
+async def webhook_whatsapp(request: Request, background_tasks: BackgroundTasks):
     """
     Recebe mensagens do WhatsApp Cloud API.
     Identifica o tenant pelo phone_number_id.
+
+    Responde 200 imediatamente e processa em background — a Meta reenvia o
+    webhook se não receber confirmação rápida, o que causava mensagens
+    duplicadas quando o processamento (Claude + tools) demorava.
 
     Payload esperado:
     { "entry": [{ "changes": [{ "value": {
@@ -168,10 +197,14 @@ async def webhook_whatsapp(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON inválido")
 
-    phone, mensagem, phone_number_id = _extrair_mensagem_whatsapp(body)
+    phone, mensagem, phone_number_id, wamid = _extrair_mensagem_whatsapp(body)
 
     if not phone or not mensagem:
         return JSONResponse(content={"status": "ignorado", "motivo": "mensagem sem texto"})
+
+    if mem.is_duplicate_message(wamid):
+        logger.info("Mensagem duplicada ignorada: wamid=%s phone=%s", wamid, phone)
+        return JSONResponse(content={"status": "duplicado", "phone": phone})
 
     tenant = mem.get_tenant_by_phone_number_id(phone_number_id) if phone_number_id else None
     if not tenant:
@@ -180,40 +213,26 @@ async def webhook_whatsapp(request: Request):
             content={"status": "erro", "motivo": f"Tenant não encontrado para phone_number_id={phone_number_id}"},
         )
 
-    resultado = await processar_mensagem(
-        tenant=tenant,
-        phone=phone,
-        mensagem_usuario=mensagem,
-    )
+    background_tasks.add_task(_processar_e_responder_whatsapp, tenant, phone, mensagem)
 
-    try:
-        await send_message(
-            channel="whatsapp",
-            phone=phone,
-            ig_user_id="",
-            text=resultado["response"],
-            tenant=tenant,
-        )
-    except Exception as e:
-        logger.error("Falha ao enviar resposta WA para %s: %s", phone, e)
-
-    return JSONResponse(content={"status": "ok", "phone": phone, **resultado})
+    return JSONResponse(content={"status": "recebido", "phone": phone})
 
 
-def _extrair_mensagem_whatsapp(body: dict) -> tuple[str, str, str]:
-    """Extrai phone, mensagem e phone_number_id do payload WhatsApp Cloud API."""
+def _extrair_mensagem_whatsapp(body: dict) -> tuple[str, str, str, str]:
+    """Extrai phone, mensagem, phone_number_id e wamid (ID único da mensagem) do payload WhatsApp Cloud API."""
     try:
         value = body["entry"][0]["changes"][0]["value"]
         phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
         messages = value.get("messages", [])
         if not messages:
-            return "", "", phone_number_id
+            return "", "", phone_number_id, ""
         msg = messages[0]
         phone = msg["from"]
         mensagem = msg.get("text", {}).get("body", "").strip()
-        return phone, mensagem, phone_number_id
+        wamid = msg.get("id", "")
+        return phone, mensagem, phone_number_id, wamid
     except (KeyError, IndexError, TypeError):
-        return "", "", ""
+        return "", "", "", ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

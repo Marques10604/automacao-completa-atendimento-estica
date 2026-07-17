@@ -113,6 +113,25 @@ def get_messages(tenant_id: str, phone: str, limit: int = 20) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# IDEMPOTÊNCIA — evita reprocessar o mesmo webhook (Meta reenvia se demorar a responder)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def is_duplicate_message(wamid: str) -> bool:
+    """Registra o wamid como processado; retorna True se ele já tinha sido visto antes."""
+    if not wamid:
+        return False
+    try:
+        sb = get_client()
+        sb.table("processed_messages").insert({"wamid": wamid}).execute()
+        return False
+    except Exception as e:
+        if "duplicate key" in str(e).lower() or "23505" in str(e):
+            return True
+        logger.error("is_duplicate_message falhou para wamid %s: %s", wamid, e)
+        return False  # em dúvida, não bloqueia o atendimento
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SESSIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
