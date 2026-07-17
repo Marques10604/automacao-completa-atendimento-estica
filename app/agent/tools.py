@@ -66,16 +66,17 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "schedule_followup",
-        "description": "Agenda job de follow-up D+1 no Supabase.",
+        "description": "Agenda job de follow-up no Supabase. Por padrão dispara em D+1, mas aceita 'days' pra qualquer intervalo (ex: recall de procedimento daqui a 180 dias).",
         "input_schema": {
             "type": "object",
             "properties": {
                 "lead_id":    {"type": "string"},
-                "job_type":   {"type": "string", "enum": ["appointment_reminder", "payment_recovery", "pos_venda"]},
+                "job_type":   {"type": "string", "enum": ["appointment_reminder", "payment_recovery", "pos_venda", "recall_procedimento"]},
                 "channel":    {"type": "string", "enum": ["whatsapp", "instagram"]},
                 "phone":      {"type": "string"},
                 "ig_user_id": {"type": "string"},
-                "payload":    {"type": "object"},
+                "days":       {"type": "integer", "description": "Dias a partir de agora até disparar. Default: 1."},
+                "payload":    {"type": "object", "description": "Dados extras pra personalizar a mensagem, ex: {\"procedimento\": \"Botox\", \"nome\": \"Maria\"}"},
             },
             "required": ["lead_id", "job_type", "channel"],
         },
@@ -109,14 +110,45 @@ async def execute_tool(tool_name: str, tool_input: dict, tenant: dict, phone: st
 
 async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
     # TODO(prod): integrar com Google Calendar ou tabela availability no Supabase
+    # Ainda é mock — mas gera horários plausíveis (não repete o input, respeita
+    # horário comercial e não sugere fim de semana) pra servir de demo decente
+    # até existir o primeiro cliente real. NÃO usar com cliente pagante.
     import logging
-    logging.getLogger(__name__).warning("_check_availability: retornando dados mock — não usar em produção")
-    date = inp.get("date", "")
-    time = inp.get("time", "qualquer horário")
+    import random
+    logging.getLogger(__name__).warning("_check_availability: retornando dados mock — não usar em produção com cliente real")
+
+    date_str = inp.get("date", "")
+    parsed_date = None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            parsed_date = datetime.strptime(date_str, fmt)
+            break
+        except (ValueError, TypeError):
+            continue
+
+    # Se caiu num domingo, empurra pra segunda — clínica não abre domingo
+    if parsed_date and parsed_date.weekday() == 6:
+        parsed_date = parsed_date + timedelta(days=1)
+
+    display_date = parsed_date.strftime("%d/%m/%Y") if parsed_date else date_str
+
+    business_hours = ["09:00", "10:30", "11:00", "14:00", "15:30", "16:00", "17:00"]
+    # Sábado só até meio-dia
+    if parsed_date and parsed_date.weekday() == 5:
+        business_hours = ["09:00", "10:00", "11:00"]
+
+    requested_time = inp.get("time", "").strip()
+    slots = random.sample(business_hours, k=min(3, len(business_hours)))
+    slots.sort()
+
+    # Se o horário pedido bate com algo plausível, prioriza ele como primeira opção
+    if requested_time and requested_time not in slots:
+        slots = [requested_time] + slots[:2]
+
     return {
         "available": True,
-        "slots": [f"{date} às {time}", f"{date} às 10:00", f"{date} às 15:00"],
-        "message": f"Horário {time} de {date} disponível.",
+        "slots": [f"{display_date} às {s}" for s in slots],
+        "message": f"Temos esses horários livres em {display_date}: {', '.join(slots)}.",
     }
 
 
@@ -128,7 +160,67 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
         "service":      inp["service"],
         "scheduled_at": inp["scheduled_at"],
     }).execute()
-    return {"success": True, "appointment_id": row.data[0]["id"]}
+    resultado = {"success": True, "appointment_id": row.data[0]["id"]}
+
+    recall_info = _agendar_recall_se_configurado(sb, inp, tenant, phone)
+    if recall_info:
+        resultado["recall_agendado"] = recall_info
+
+    return resultado
+
+
+def _agendar_recall_se_configurado(sb, inp: dict, tenant: dict, phone: str) -> dict | None:
+    """
+    Se o tenant tiver configurado procedimentos_recall (JSONB: {"nome do procedimento": dias}),
+    procura o serviço agendado nesse mapa (case-insensitive, por substring) e já cria
+    automaticamente o followup_job de recall — sem depender do modelo lembrar de chamar isso.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    regras = tenant.get("procedimentos_recall") or {}
+    if not regras:
+        return None
+
+    servico = (inp.get("service") or "").strip().lower()
+    if not servico:
+        return None
+
+    dias_recall = None
+    procedimento_encontrado = None
+    for nome_regra, dias in regras.items():
+        nome_regra_lower = str(nome_regra).strip().lower()
+        if nome_regra_lower in servico or servico in nome_regra_lower:
+            dias_recall = dias
+            procedimento_encontrado = nome_regra
+            break
+
+    if dias_recall is None:
+        logger.info("Nenhuma regra de recall bate com o serviço '%s' — recall não agendado", servico)
+        return None
+
+    try:
+        agendamento_em = datetime.fromisoformat(inp["scheduled_at"])
+    except (ValueError, TypeError):
+        agendamento_em = datetime.now(timezone.utc)
+
+    scheduled_at = (agendamento_em + timedelta(days=int(dias_recall))).isoformat()
+
+    row = sb.table("followup_jobs").insert({
+        "lead_id":      inp["lead_id"],
+        "tenant_id":    str(tenant["id"]),
+        "channel":      "whatsapp",
+        "phone":        phone,
+        "job_type":     "recall_procedimento",
+        "scheduled_at": scheduled_at,
+        "payload":      {"procedimento": procedimento_encontrado, "dias": dias_recall},
+    }).execute()
+
+    logger.info(
+        "Recall agendado: procedimento='%s' dias=%s scheduled_at=%s job_id=%s",
+        procedimento_encontrado, dias_recall, scheduled_at, row.data[0]["id"],
+    )
+    return {"job_id": row.data[0]["id"], "procedimento": procedimento_encontrado, "scheduled_at": scheduled_at}
 
 
 async def _generate_payment_link(inp: dict, tenant: dict, phone: str) -> dict:
@@ -169,7 +261,8 @@ async def _update_lead_status(inp: dict, tenant: dict, phone: str) -> dict:
 
 async def _schedule_followup(inp: dict, tenant: dict, phone: str) -> dict:
     sb = mem.get_client()
-    scheduled_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    dias = inp.get("days", 1)
+    scheduled_at = (datetime.now(timezone.utc) + timedelta(days=int(dias))).isoformat()
     row = sb.table("followup_jobs").insert({
         "lead_id":      inp["lead_id"],
         "tenant_id":    str(tenant["id"]),

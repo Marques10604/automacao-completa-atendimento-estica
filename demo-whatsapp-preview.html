@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Demo — Agente de Atendimento</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #05080a; display: flex; justify-content: center; align-items: flex-start;
+    gap: 28px; padding: 40px; flex-wrap: wrap;
+  }
+
+  /* ---------- Painel de configuração ---------- */
+  .setup {
+    width: 300px; color: #d7dade; font-size: 13px;
+    background: #1a1a1a; padding: 16px; border-radius: 14px;
+    border: 1px solid #2a2a2a; position: relative;
+  }
+  .setup.hidden { display: none; }
+  .toggle-btn {
+    position: fixed; top: 18px; left: 18px; z-index: 100;
+    background: #1a1a1a; color: #d7dade; border: 1px solid #2a2a2a;
+    border-radius: 10px; padding: 8px 14px; font-size: 12.5px; cursor: pointer;
+    font-family: inherit;
+  }
+  .toggle-btn:hover { background: #242424; }
+  .setup h3 { margin: 0 0 12px; font-size: 14px; color: #fff; font-weight: 600; }
+  .setup label { display: block; font-size: 11px; color: #8a8f98; margin-top: 10px; }
+  .setup input {
+    width: 100%; margin-top: 4px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid #333; background: #0f0f0f; color: #fff; font-size: 13px; outline: none;
+  }
+  .setup input:focus { border-color: #00a884; }
+  .setup input[type="file"] {
+    padding: 6px 8px; font-size: 11.5px; color: #8a8f98;
+  }
+  .setup input[type="file"]::-webkit-file-upload-button {
+    background: #00a884; color: #fff; border: none; border-radius: 6px;
+    padding: 5px 10px; font-size: 11.5px; margin-right: 8px; cursor: pointer;
+  }
+  .setup .hint { font-size: 11px; color: #6b7078; margin-top: 12px; line-height: 1.5; }
+
+  /* ---------- Frame do celular ---------- */
+  .phone-shell {
+    width: 288px; height: 624px; background: #000; border-radius: 42px;
+    padding: 11px; box-shadow: 0 24px 60px rgba(0,0,0,.6), 0 0 0 2px #1c1c1e inset;
+    position: relative;
+  }
+  .phone {
+    width: 100%; height: 100%; background: #ece5dd; border-radius: 31px;
+    overflow: hidden; display: flex; flex-direction: column; position: relative;
+  }
+  .notch {
+    position: absolute; top: 11px; left: 50%; transform: translateX(-50%);
+    width: 92px; height: 20px; background: #000; border-radius: 12px; z-index: 20;
+  }
+
+  /* ---------- Status bar (hora, sinal, bateria) ---------- */
+  .statusbar {
+    height: 34px; flex-shrink: 0; background: #075e54; display: flex;
+    align-items: center; justify-content: space-between; padding: 0 20px 0 17px;
+    color: #fff; font-size: 12px; font-weight: 600; position: relative; z-index: 10;
+  }
+  .statusbar .icons { display: flex; align-items: center; gap: 4px; }
+  .statusbar svg { display: block; }
+
+  /* ---------- Header (contato) ---------- */
+  .header {
+    background: #075e54; color: #fff; padding: 6px 10px 9px;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  }
+  .header .back { font-size: 18px; opacity: .9; padding-right: 1px; }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: linear-gradient(135deg, #34b7a7, #128c7e);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; color: #fff; font-size: 11px; flex-shrink: 0;
+    overflow: hidden;
+  }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .header .info { flex: 1; min-width: 0; }
+  .header .name { font-weight: 600; font-size: 14px; line-height: 1.2; }
+  .header .status { font-size: 11px; color: #cfe9e4; line-height: 1.3; }
+  .header .actions { display: flex; gap: 14px; font-size: 15px; opacity: .95; }
+
+  /* ---------- Área de chat com wallpaper do WhatsApp ---------- */
+  .chat {
+    flex: 1; overflow-y: auto; padding: 10px 10px 6px;
+    display: flex; flex-direction: column; gap: 2px;
+    background-color: #eae6df;
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 38px, rgba(0,0,0,.015) 38px, rgba(0,0,0,.015) 76px),
+      radial-gradient(circle at 8% 12%, rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 24% 34%, rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 42% 8%,  rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 61% 28%, rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 78% 6%,  rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 12% 55%, rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 88% 48%, rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 33% 72%, rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 55% 88%, rgba(0,0,0,.035) 0, transparent 2%),
+      radial-gradient(circle at 92% 82%, rgba(0,0,0,.035) 0, transparent 2%);
+    background-size: 100% 76px, 90px 90px, 90px 90px, 90px 90px, 90px 90px, 90px 90px, 90px 90px, 90px 90px, 90px 90px, 90px 90px, 90px 90px;
+  }
+  .day-chip {
+    align-self: center; background: #e1f2fb; color: #5b6971; font-size: 11.5px;
+    padding: 4px 10px; border-radius: 8px; margin: 6px 0 10px; box-shadow: 0 1px 1px rgba(0,0,0,.08);
+  }
+
+  .row { display: flex; animation: pop .18s ease-out; }
+  .row.in  { justify-content: flex-start; }
+  .row.out { justify-content: flex-end; }
+  @keyframes pop { from { opacity: 0; transform: translateY(4px) scale(.98); } to { opacity: 1; transform: none; } }
+
+  .bubble {
+    max-width: 76%; padding: 5px 7px 5px 8px; border-radius: 7px; font-size: 12.8px;
+    line-height: 1.36; white-space: pre-wrap; position: relative; margin: 2px 0;
+    box-shadow: 0 1px 0.5px rgba(0,0,0,.13);
+  }
+  .in .bubble  { background: #fff; color: #111b21; border-top-left-radius: 2px; }
+  .out .bubble { background: #d9fdd3; color: #111b21; border-top-right-radius: 2px; }
+
+  .in .bubble::before {
+    content: ""; position: absolute; top: 0; left: -7px; width: 0; height: 0;
+    border-top: 8px solid #fff; border-left: 8px solid transparent;
+  }
+  .out .bubble::after {
+    content: ""; position: absolute; top: 0; right: -7px; width: 0; height: 0;
+    border-top: 8px solid #d9fdd3; border-right: 8px solid transparent;
+  }
+
+  .meta { font-size: 10.5px; color: #667781; margin-top: 2px; text-align: right; float: right;
+          margin-left: 8px; display: flex; align-items: center; gap: 2px; }
+  .meta svg { display: block; }
+
+  /* ---------- Indicador "digitando" com bolinhas animadas ---------- */
+  .typing-row { display: flex; justify-content: flex-start; margin: 2px 0; }
+  .typing-bubble {
+    background: #fff; padding: 9px 14px; border-radius: 8px; border-top-left-radius: 2px;
+    box-shadow: 0 1px 0.5px rgba(0,0,0,.13); display: flex; gap: 3px; align-items: center;
+  }
+  .typing-bubble span {
+    width: 6px; height: 6px; border-radius: 50%; background: #93a0a8;
+    animation: bounce 1.2s infinite ease-in-out;
+  }
+  .typing-bubble span:nth-child(2) { animation-delay: .15s; }
+  .typing-bubble span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%,60%,100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+  /* ---------- Barra de digitação ---------- */
+  .inputbar {
+    background: #f0f0f0; padding: 6px 8px; display: flex; gap: 6px;
+    flex-shrink: 0; align-items: center;
+  }
+  .inputbar .field {
+    flex: 1; background: #fff; border-radius: 20px; padding: 7px 12px;
+    display: flex; align-items: center; box-shadow: 0 1px 1px rgba(0,0,0,.06);
+  }
+  .inputbar input {
+    flex: 1; border: none; background: transparent; font-size: 12.8px; outline: none; color: #111b21;
+  }
+  .inputbar .send {
+    width: 34px; height: 34px; border-radius: 50%; background: #00a884; border: none;
+    color: #fff; font-size: 15px; cursor: pointer; flex-shrink: 0; display: flex;
+    align-items: center; justify-content: center;
+  }
+  .inputbar .send:disabled { opacity: .5; cursor: default; }
+  .inputbar .send:active { transform: scale(.94); }
+</style>
+</head>
+<body>
+
+  <button class="toggle-btn" id="toggleBtn" onclick="toggleSetup()">🙈 Ocultar painel</button>
+
+  <div class="setup" id="setupPanel">
+    <h3>⚙️ Configuração da demo</h3>
+    <label>URL do backend (rodando local)</label>
+    <input id="apiUrl" value="http://localhost:8000/chat">
+    <label>tenant_name (slug do tenant no Supabase)</label>
+    <input id="tenantName" value="minha-clinica">
+    <label>Nome exibido no topo do chat</label>
+    <input id="displayName" value="Clínica Sorriso — Atendimento" oninput="document.getElementById('clinicName').textContent = this.value">
+    <label>Foto do contato — escolhe um arquivo do seu computador</label>
+    <input type="file" id="avatarFile" accept="image/*" onchange="handleAvatarFile(this)">
+    <label style="margin-top:8px">...ou cole uma URL de imagem</label>
+    <input id="avatarUrl" placeholder="https://... (opcional)" oninput="setAvatar(this.value)">
+    <div id="avatarPreviewWrap" style="display:none; align-items:center; gap:8px; margin-top:8px;">
+      <img id="avatarPreview" style="width:32px; height:32px; border-radius:50%; object-fit:cover; display:block;">
+      <span style="font-size:11px; color:#8a8f98;">foto ajustada e centralizada automaticamente</span>
+    </div>
+    <label>Número simulado do paciente</label>
+    <input id="phone" value="5585999999999">
+    <div class="hint">Isso roda 100% local, contra o seu `python main.py`. Nada sai da sua máquina. Deixa essa janela do lado, grava só o celular.</div>
+  </div>
+
+  <div class="phone-shell">
+    <div class="notch"></div>
+    <div class="phone">
+
+      <div class="statusbar">
+        <span id="clockTime">21:04</span>
+        <div class="icons">
+          <svg width="16" height="11" viewBox="0 0 16 11" fill="white"><rect x="0" y="7" width="3" height="4"/><rect x="4.5" y="5" width="3" height="6"/><rect x="9" y="2.5" width="3" height="8.5"/><rect x="13" y="0" width="3" height="11"/></svg>
+          <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x="0.5" y="0.5" width="20" height="10" rx="2.5" stroke="white"/><rect x="2" y="2" width="16" height="7" rx="1.3" fill="white"/><rect x="21" y="3.5" width="1.6" height="4" rx="0.8" fill="white"/></svg>
+        </div>
+      </div>
+
+      <div class="header">
+        <div class="back">‹</div>
+        <div class="avatar" id="avatarBox"><img id="avatarImg" src="" alt=""></div>
+        <div class="info">
+          <div class="name" id="clinicName">Clínica Sorriso — Atendimento</div>
+          <div class="status" id="statusLine">online</div>
+        </div>
+        <div class="actions">
+          <span>📹</span><span>📞</span>
+        </div>
+      </div>
+
+      <div class="chat" id="chat">
+        <div class="day-chip">Hoje</div>
+      </div>
+
+      <div class="inputbar">
+        <div class="field">
+          <input id="msgInput" placeholder="Digite como se fosse o paciente..." onkeydown="if(event.key==='Enter')sendMsg()">
+        </div>
+        <button class="send" id="sendBtn" onclick="sendMsg()">➤</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const DEFAULT_AVATAR = "data:image/svg+xml;utf8," + encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34b7a7"/>
+      <stop offset="1" stop-color="#0f7a6c"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" fill="url(#g)"/>
+  <circle cx="50" cy="40" r="18" fill="#ffffff" fill-opacity=".92"/>
+  <path d="M14 92c0-22 16-36 36-36s36 14 36 36" fill="#ffffff" fill-opacity=".92"/>
+</svg>`);
+
+function toggleSetup() {
+  const panel = document.getElementById('setupPanel');
+  const btn = document.getElementById('toggleBtn');
+  const hidden = panel.classList.toggle('hidden');
+  btn.textContent = hidden ? '👁 Mostrar painel' : '🙈 Ocultar painel';
+}
+
+function setAvatar(url) {
+  document.getElementById('avatarImg').src = (url && url.trim()) ? url.trim() : DEFAULT_AVATAR;
+}
+setAvatar('');
+
+function handleAvatarFile(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;
+    // object-fit: cover no CSS do avatar já centraliza e corta a foto pra
+    // caber certinho no círculo, não importa o formato/tamanho original
+    document.getElementById('avatarImg').src = dataUrl;
+    document.getElementById('avatarUrl').value = ''; // evita conflito com o campo de URL
+    const preview = document.getElementById('avatarPreview');
+    preview.src = dataUrl;
+    document.getElementById('avatarPreviewWrap').style.display = 'flex';
+  };
+  reader.readAsDataURL(file);
+}
+
+function updateClock() {
+  document.getElementById('clockTime').textContent =
+    new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+}
+updateClock();
+setInterval(updateClock, 15000);
+
+function nowStr() {
+  return new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+}
+
+const checkSvg = `<svg width="15" height="11" viewBox="0 0 15 11" fill="#53bdeb"><path d="M1 5.5L4 8.5L9.5 1.5" stroke="#53bdeb" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.2 5.5L8.2 8.5L13.7 1.5" stroke="#53bdeb" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+function addBubble(text, who) {
+  const chat = document.getElementById('chat');
+  const row = document.createElement('div');
+  row.className = 'row ' + who;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerHTML = escapeHtml(text).replace(/\n/g, '<br>') +
+    `<span class="meta">${nowStr()}${who === 'out' ? checkSvg : ''}</span>`;
+  row.appendChild(bubble);
+  chat.appendChild(row);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function addTyping() {
+  const chat = document.getElementById('chat');
+  const row = document.createElement('div');
+  row.className = 'typing-row';
+  row.id = 'typingIndicator';
+  row.innerHTML = `<div class="typing-bubble"><span></span><span></span><span></span></div>`;
+  chat.appendChild(row);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function removeTyping() {
+  const t = document.getElementById('typingIndicator');
+  if (t) t.remove();
+}
+
+async function sendMsg() {
+  const input = document.getElementById('msgInput');
+  const btn = document.getElementById('sendBtn');
+  const text = input.value.trim();
+  if (!text) return;
+
+  addBubble(text, 'out');
+  input.value = '';
+  btn.disabled = true;
+  document.getElementById('statusLine').textContent = 'digitando...';
+
+  await new Promise(r => setTimeout(r, 350)); // pequena pausa antes de mostrar "digitando", fica mais natural
+  addTyping();
+
+  const apiUrl = document.getElementById('apiUrl').value;
+  const tenantName = document.getElementById('tenantName').value;
+  const phone = document.getElementById('phone').value;
+
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ tenant_name: tenantName, phone: phone, message: text })
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      removeTyping();
+      addBubble('[erro ' + res.status + '] ' + err, 'in');
+    } else {
+      const data = await res.json();
+      removeTyping();
+      addBubble(data.response, 'in');
+    }
+  } catch (e) {
+    removeTyping();
+    addBubble('[erro de conexão] ' + e.message + ' — confere se o backend tá rodando em ' + apiUrl, 'in');
+  }
+  btn.disabled = false;
+  document.getElementById('statusLine').textContent = 'online';
+  input.focus();
+}
+</script>
+</body>
+</html>

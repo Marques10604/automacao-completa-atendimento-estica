@@ -11,7 +11,21 @@ TEMPLATES = {
     "appointment_reminder": "Olá! 🗓️ Só passando para confirmar seu agendamento amanhã. Você vem, né? Qualquer dúvida é só falar!",
     "payment_recovery":     "Olá! Vi que você não finalizou o pagamento. O link ainda está válido — posso te ajudar com alguma dúvida? ✨",
     "pos_venda":            "Olá! Esperamos que tenha adorado o resultado! 😊 Tem alguém que você indicaria para conhecer nossos serviços?",
+    "recall_procedimento":  "Olá! 💫 Já faz um tempinho desde o seu {procedimento} — geralmente é nessa época que dá aquela renovada pra manter o resultado. Quer que eu já veja um horário pra você?",
 }
+
+
+def _montar_texto(job: dict) -> str:
+    job_type = job.get("job_type")
+    template = TEMPLATES.get(job_type, "Olá! Tudo bem por aí?")
+    payload = job.get("payload") or {}
+    try:
+        return template.format(**payload)
+    except (KeyError, IndexError):
+        # Se faltar alguma variável no payload, cai pra uma versão genérica em vez de quebrar o envio
+        if job_type == "recall_procedimento":
+            return "Olá! 💫 Já faz um tempinho desde seu último procedimento — geralmente é nessa época que dá aquela renovada. Quer que eu já veja um horário pra você?"
+        return template
 
 
 async def executar_jobs_pendentes() -> None:
@@ -46,7 +60,7 @@ async def _executar_job(job: dict, sb) -> None:
     if not tenant:
         logger.warning("Job %s sem tenant associado — usando credenciais globais", job["id"])
 
-    text = TEMPLATES.get(job.get("job_type"), "Olá! Tudo bem por aí?")
+    text = _montar_texto(job)
 
     await send_message(
         channel=job["channel"],

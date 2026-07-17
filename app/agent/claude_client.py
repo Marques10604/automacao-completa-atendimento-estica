@@ -8,7 +8,7 @@ from app.agent.tools import TOOL_DEFINITIONS, execute_tool
 logger = logging.getLogger(__name__)
 
 _anthropic_client = anthropic.AsyncAnthropic()
-MODELO = "claude-sonnet-4-6"
+MODELO = "claude-sonnet-5"
 MAX_TOKENS = 1024
 
 _PROMPT_FALLBACK = "Você é uma assistente de vendas de alta performance. Ajude o lead a agendar e fechar negócio."
