@@ -81,6 +81,18 @@ TOOL_DEFINITIONS = [
             "required": ["lead_id", "job_type", "channel"],
         },
     },
+    {
+        "name": "escalate_to_human",
+        "description": "Transfere o atendimento pra um humano da equipe — a IA para de responder esse lead até alguém reativar manualmente. Use quando o lead pedir explicitamente pra falar com uma pessoa, relatar uma reação pós-procedimento grave, ou qualquer situação que a IA não deva resolver sozinha.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string"},
+                "motivo":  {"type": "string", "description": "Por que está escalando, ex: 'pediu para falar com humano' ou 'relatou reação alérgica'"},
+            },
+            "required": ["lead_id", "motivo"],
+        },
+    },
 ]
 
 import httpx
@@ -96,6 +108,7 @@ async def execute_tool(tool_name: str, tool_input: dict, tenant: dict, phone: st
         "migrate_to_whatsapp":   _migrate_to_whatsapp,
         "update_lead_status":    _update_lead_status,
         "schedule_followup":     _schedule_followup,
+        "escalate_to_human":     _escalate_to_human,
     }
     fn = dispatch.get(tool_name)
     if not fn:
@@ -257,6 +270,33 @@ async def _update_lead_status(inp: dict, tenant: dict, phone: str) -> dict:
     sb = mem.get_client()
     sb.table("leads").update({"stage": inp["status"]}).eq("id", inp["lead_id"]).execute()
     return {"updated": True, "status": inp["status"]}
+
+
+async def _escalate_to_human(inp: dict, tenant: dict, phone: str) -> dict:
+    import logging
+    logger = logging.getLogger(__name__)
+
+    sb = mem.get_client()
+    sb.table("leads").update({"escalado": True}).eq("id", inp["lead_id"]).execute()
+
+    motivo = inp.get("motivo", "sem motivo informado")
+    staff_phone = tenant.get("staff_phone")
+    notificado = False
+    if staff_phone:
+        from app.agent.dispatcher import send_whatsapp
+        from app.config import settings
+        wa_token = tenant.get("whatsapp_token") or settings.meta_wa_token
+        phone_number_id = tenant.get("phone_number_id") or settings.meta_wa_phone_number_id
+        texto = f"⚠️ Atendimento escalado para humano.\nCliente: {phone}\nMotivo: {motivo}"
+        try:
+            await send_whatsapp(staff_phone, texto, wa_token, phone_number_id)
+            notificado = True
+        except Exception as e:
+            logger.error("Falha ao notificar staff_phone %s do tenant %s: %s", staff_phone, tenant.get("name"), e)
+    else:
+        logger.warning("Tenant %s escalou lead %s sem staff_phone configurado — ninguém foi notificado", tenant.get("name"), inp["lead_id"])
+
+    return {"escalado": True, "notificado": notificado}
 
 
 async def _schedule_followup(inp: dict, tenant: dict, phone: str) -> dict:
