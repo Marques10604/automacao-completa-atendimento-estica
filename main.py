@@ -1,5 +1,6 @@
 # main.py - FastAPI com webhook WhatsApp Cloud API
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -7,7 +8,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -144,7 +145,7 @@ def _validar_assinatura_meta(payload: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(expected, signature_header[7:])
 
 
-async def _processar_e_responder_whatsapp(tenant: dict, phone: str, mensagem: str) -> None:
+async def _processar_e_responder_whatsapp(tenant: dict, phone: str, mensagem: str, ja_salvo: bool = False) -> None:
     """Roda em background (após o 200 já ter sido devolvido pra Meta): processa a
     mensagem com a Claude e envia a resposta pelo WhatsApp."""
     try:
@@ -152,9 +153,14 @@ async def _processar_e_responder_whatsapp(tenant: dict, phone: str, mensagem: st
             tenant=tenant,
             phone=phone,
             mensagem_usuario=mensagem,
+            ja_salvo=ja_salvo,
         )
     except Exception as e:
         logger.error("Falha ao processar mensagem WA de %s: %s", phone, e)
+        return
+
+    if resultado.get("escalado"):
+        # Atendimento assumido por humano — a IA fica muda, não envia nada.
         return
 
     try:
@@ -169,16 +175,39 @@ async def _processar_e_responder_whatsapp(tenant: dict, phone: str, mensagem: st
         logger.error("Falha ao enviar resposta WA para %s: %s", phone, e)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# BUFFER DE RAJADA — agrupa mensagens rápidas em sequência antes de chamar a IA
+# ─────────────────────────────────────────────────────────────────────────────
+# Se o lead manda "oi" e "quero botox" em duas mensagens seguidas rapidinho, sem
+# isso o webhook dispara duas chamadas concorrentes pra Claude sobre o mesmo lead
+# (cada uma sem saber da outra) — respostas duplicadas/contraditórias. Aqui, cada
+# mensagem nova cancela o processamento pendente anterior do mesmo número e
+# reagenda; só a última mensagem da rajada efetivamente aciona a IA, mas todas já
+# foram salvas no histórico antes disso, então nada se perde.
+DEBOUNCE_SECONDS = 2.5
+_debounce_tasks: dict[str, asyncio.Task] = {}
+
+
+async def _aguardar_e_processar(tenant: dict, phone: str, mensagem: str, key: str) -> None:
+    try:
+        await asyncio.sleep(DEBOUNCE_SECONDS)
+    except asyncio.CancelledError:
+        return  # chegou mensagem mais nova do mesmo número — quem responde é o próximo agendamento
+    _debounce_tasks.pop(key, None)
+    await _processar_e_responder_whatsapp(tenant, phone, mensagem, ja_salvo=True)
+
+
 @app.post("/webhook/whatsapp")
 @limiter.limit("10/minute")
-async def webhook_whatsapp(request: Request, background_tasks: BackgroundTasks):
+async def webhook_whatsapp(request: Request):
     """
     Recebe mensagens do WhatsApp Cloud API.
     Identifica o tenant pelo phone_number_id.
 
-    Responde 200 imediatamente e processa em background — a Meta reenvia o
-    webhook se não receber confirmação rápida, o que causava mensagens
-    duplicadas quando o processamento (Claude + tools) demorava.
+    Responde 200 imediatamente. A mensagem é salva na hora (garante histórico
+    completo mesmo em rajada), e o processamento pela IA é debounced — se chegar
+    outra mensagem do mesmo número em menos de DEBOUNCE_SECONDS, o processamento
+    anterior é cancelado e substituído, evitando respostas concorrentes/duplicadas.
 
     Payload esperado:
     { "entry": [{ "changes": [{ "value": {
@@ -213,7 +242,18 @@ async def webhook_whatsapp(request: Request, background_tasks: BackgroundTasks):
             content={"status": "erro", "motivo": f"Tenant não encontrado para phone_number_id={phone_number_id}"},
         )
 
-    background_tasks.add_task(_processar_e_responder_whatsapp, tenant, phone, mensagem)
+    tenant_id = str(tenant["id"])
+    key = f"{tenant_id}:{phone}"
+
+    # Salva a mensagem imediatamente — independe do debounce, garante que nada se perde.
+    mem.get_or_create_lead(tenant_id, phone, "whatsapp")
+    mem.save_message(tenant_id, phone, "user", mensagem)
+
+    anterior = _debounce_tasks.get(key)
+    if anterior and not anterior.done():
+        anterior.cancel()
+
+    _debounce_tasks[key] = asyncio.create_task(_aguardar_e_processar(tenant, phone, mensagem, key))
 
     return JSONResponse(content={"status": "recebido", "phone": phone})
 
@@ -310,6 +350,29 @@ async def reset_lead(tenant_name: str, phone: str, x_admin_key: str | None = Hea
     return {"status": "ok", "mensagem": f"Lead {phone} resetado para tenant {tenant_name}"}
 
 
+def _set_escalado(tenant_name: str, phone: str, valor: bool) -> dict:
+    tenant = mem.get_tenant_by_name(tenant_name)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant não encontrado")
+    sb = mem.get_client()
+    sb.table("leads").update({"escalado": valor}).eq("tenant_id", tenant["id"]).eq("phone", phone).execute()
+    return {"status": "ok", "phone": phone, "escalado": valor}
+
+
+@app.patch("/lead/{tenant_name}/{phone}/escalar")
+async def escalar_lead(tenant_name: str, phone: str, x_admin_key: str | None = Header(default=None)):
+    """Marca o lead como escalado pra humano — a IA para de responder até ser reativada."""
+    _verificar_admin(x_admin_key)
+    return _set_escalado(tenant_name, phone, True)
+
+
+@app.patch("/lead/{tenant_name}/{phone}/desescalar")
+async def desescalar_lead(tenant_name: str, phone: str, x_admin_key: str | None = Header(default=None)):
+    """Devolve o lead pra IA responder normalmente de novo."""
+    _verificar_admin(x_admin_key)
+    return _set_escalado(tenant_name, phone, False)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PAYMENT CALLBACK — Asaas
 # ─────────────────────────────────────────────────────────────────────────────
@@ -375,7 +438,7 @@ async def payment_confirm(request: Request):
             "payload":      {"payment_id": payment_id},
         }).execute()
 
-        sb.table("leads").update({"status": "fechado"}).eq("id", lead_id).execute()
+        sb.table("leads").update({"stage": "fechado"}).eq("id", lead_id).execute()
     except Exception as e:
         logger.error("Erro ao processar payment_confirm para lead %s: %s", lead_id, e)
         return JSONResponse(status_code=500, content={"status": "erro_interno"})

@@ -189,8 +189,8 @@
       <img id="avatarPreview" style="width:32px; height:32px; border-radius:50%; object-fit:cover; display:block;">
       <span style="font-size:11px; color:#8a8f98;">foto ajustada e centralizada automaticamente</span>
     </div>
-    <label>Número simulado do paciente</label>
-    <input id="phone" value="5585999999999">
+    <label>Número simulado do paciente (troca a cada novo teste, pra não herdar histórico antigo)</label>
+    <input id="phone" value="5585999999901">
     <div class="hint">Isso roda 100% local, contra o seu `python main.py`. Nada sai da sua máquina. Deixa essa janela do lado, grava só o celular.</div>
   </div>
 
@@ -352,7 +352,24 @@ async function sendMsg() {
     } else {
       const data = await res.json();
       removeTyping();
-      addBubble(data.response, 'in');
+      // Uma pessoa real não manda um parágrafo gigante de uma vez — manda várias
+      // mensagens curtas em sequência. Quebra a resposta em parágrafos (linha em
+      // branco) e envia cada um como uma bolha separada, com "digitando" entre elas.
+      const partes = (data.response || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+      for (let i = 0; i < partes.length; i++) {
+        const parte = partes[i];
+        // ~70ms/caractere (ritmo real de digitação em celular) + variação aleatória,
+        // com piso maior pra mensagens curtas — ninguém "estala" uma resposta de 0.7s.
+        const base = Math.min(6000, Math.max(1600, parte.length * 70));
+        const tempoDigitando = base * (0.85 + Math.random() * 0.3);
+        addTyping();
+        await new Promise(r => setTimeout(r, tempoDigitando));
+        removeTyping();
+        addBubble(parte, 'in');
+        if (i < partes.length - 1) {
+          await new Promise(r => setTimeout(r, 600 + Math.random() * 400)); // pausa entre bolhas
+        }
+      }
     }
   } catch (e) {
     removeTyping();

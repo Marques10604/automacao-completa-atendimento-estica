@@ -255,7 +255,7 @@ async def _migrate_to_whatsapp(inp: dict, tenant: dict, phone: str) -> dict:
 
 async def _update_lead_status(inp: dict, tenant: dict, phone: str) -> dict:
     sb = mem.get_client()
-    sb.table("leads").update({"status": inp["status"]}).eq("id", inp["lead_id"]).execute()
+    sb.table("leads").update({"stage": inp["status"]}).eq("id", inp["lead_id"]).execute()
     return {"updated": True, "status": inp["status"]}
 
 

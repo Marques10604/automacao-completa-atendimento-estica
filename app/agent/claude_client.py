@@ -28,6 +28,7 @@ async def processar_mensagem(
     mensagem_usuario: str,
     canal: str = "whatsapp",
     ig_user_id: str = "",
+    ja_salvo: bool = False,
 ) -> dict:
     tenant_id = str(tenant["id"])
     identifier = phone or ig_user_id
@@ -35,14 +36,29 @@ async def processar_mensagem(
     lead = mem.get_or_create_lead(tenant_id, identifier, canal)
     lead_id = str(lead["id"])
 
-    # Salvar mensagem do usuário primeiro (para incluir no histórico)
-    mem.save_message(tenant_id, identifier, "user", mensagem_usuario)
+    # Salvar mensagem do usuário (pulado se o chamador já salvou antes — caso do buffer
+    # de rajada no webhook, que salva a mensagem na hora e só chama isso depois do debounce)
+    if not ja_salvo:
+        mem.save_message(tenant_id, identifier, "user", mensagem_usuario)
+
+    # Handoff pra humano: se um atendente já assumiu esse lead (leads.escalado = true),
+    # a IA fica muda até ser reativada — nunca responde por cima de um humano.
+    if lead.get("escalado"):
+        logger.info("Lead %s está escalado para atendimento humano — IA não responde", lead_id)
+        return {
+            "response":  "",
+            "stage":     lead.get("stage", "qualificacao"),
+            "canal":     canal,
+            "tenant_id": tenant_id,
+            "lead_id":   lead_id,
+            "escalado":  True,
+        }
 
     # Tratar opt-out SAIR antes de chamar Claude
     if mensagem_usuario.strip().upper() == "SAIR":
         sb = mem.get_client()
         await asyncio.to_thread(
-            lambda: sb.table("leads").update({"status": "frio"}).eq("id", lead_id).execute()
+            lambda: sb.table("leads").update({"stage": "frio"}).eq("id", lead_id).execute()
         )
         resposta_sair = "Entendido! Removemos seus dados do nosso sistema. Se quiser retornar, é só nos chamar. 💛"
         mem.save_message(tenant_id, identifier, "assistant", resposta_sair)
@@ -57,10 +73,16 @@ async def processar_mensagem(
     # Uma única query de histórico (já inclui a mensagem do usuário recém salva)
     historico = mem.get_messages(tenant_id, identifier)
 
-    # Salvar consentimento LGPD (opt-in implícito) na primeira mensagem
-    if len(historico) == 1:  # histórico tem só a mensagem que acabou de salvar — é a primeira
-        try:
-            sb = mem.get_client()
+    # Salvar consentimento LGPD (opt-in implícito) — checa se já existe em vez de contar
+    # mensagens no histórico (com o buffer de rajada, a primeira interação pode já
+    # chegar com várias mensagens salvas de uma vez, então "len(historico) == 1" não
+    # é mais confiável pra saber se é a primeira vez que falamos com esse lead).
+    try:
+        sb = mem.get_client()
+        existente = await asyncio.to_thread(
+            lambda: sb.table("consent_log").select("id").eq("lead_id", lead_id).limit(1).execute()
+        )
+        if not existente.data:
             await asyncio.to_thread(
                 lambda: sb.table("consent_log").insert({
                     "lead_id":      lead_id,
@@ -69,9 +91,9 @@ async def processar_mensagem(
                     "consent_text": "Opt-in implícito: lead iniciou conversa. LGPD informada na primeira mensagem.",
                 }).execute()
             )
-        except Exception as e:
-            logger.error("Falha ao salvar consent_log para lead %s: %s", lead_id, e)
-            # continua — falha de consent_log não deve interromper o atendimento
+    except Exception as e:
+        logger.error("Falha ao verificar/salvar consent_log para lead %s: %s", lead_id, e)
+        # continua — falha de consent_log não deve interromper o atendimento
 
     system_prompt = _get_system_prompt(tenant, canal)
     mensagens_api = [{"role": m["role"], "content": m["content"]} for m in historico]
@@ -103,7 +125,14 @@ async def processar_mensagem(
             tool_results = []
             for block in resposta.content:
                 if block.type == "tool_use":
-                    result = await execute_tool(block.name, block.input, tenant, phone)
+                    tool_input = dict(block.input)
+                    if "lead_id" in tool_input:
+                        # O modelo nunca sabe o UUID real do lead (não está no prompt nem
+                        # em nenhum tool_result) — se deixado por conta própria, inventa um
+                        # placeholder tipo "lead_temp_001", que quebra no Postgres (uuid inválido).
+                        # O servidor sempre sabe o lead_id certo desta conversa; usamos ele.
+                        tool_input["lead_id"] = lead_id
+                    result = await execute_tool(block.name, tool_input, tenant, phone)
                     tool_results.append({
                         "type":        "tool_result",
                         "tool_use_id": block.id,
