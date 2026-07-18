@@ -94,7 +94,7 @@ def save_message(tenant_id: str, phone: str, role: str, content: str) -> None:
 
 
 def get_messages(tenant_id: str, phone: str, limit: int = 20) -> list[dict]:
-    """Retorna as últimas N mensagens da conversa."""
+    """Retorna as últimas N mensagens da conversa, em ordem cronológica."""
     try:
         sb = get_client()
         result = (
@@ -102,11 +102,13 @@ def get_messages(tenant_id: str, phone: str, limit: int = 20) -> list[dict]:
             .select("role, content")
             .eq("tenant_id", tenant_id)
             .eq("phone", phone)
-            .order("created_at", desc=False)
+            .order("created_at", desc=True)
             .limit(limit)
             .execute()
         )
-        return result.data or []
+        mensagens = result.data or []
+        mensagens.reverse()  # a query veio da mais nova pra mais velha — devolve em ordem cronológica
+        return mensagens
     except Exception as e:
         logger.error("get_messages failed: %s", e)
         return []
