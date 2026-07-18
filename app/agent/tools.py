@@ -167,13 +167,36 @@ async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
 
 async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
     sb = mem.get_client()
-    row = sb.table("appointments").insert({
-        "lead_id":      inp["lead_id"],
-        "tenant_id":    str(tenant["id"]),
-        "service":      inp["service"],
-        "scheduled_at": inp["scheduled_at"],
-    }).execute()
-    resultado = {"success": True, "appointment_id": row.data[0]["id"]}
+
+    # Evita duplicar: se o lead já tem um agendamento futuro em aberto, atualiza em vez de
+    # inserir outro (acontece quando o lead confirma de novo depois de já confirmado).
+    agora = datetime.now(timezone.utc).isoformat()
+    existentes = (
+        sb.table("appointments")
+        .select("id")
+        .eq("lead_id", inp["lead_id"])
+        .gte("scheduled_at", agora)
+        .order("scheduled_at", desc=False)
+        .limit(1)
+        .execute()
+    ).data
+
+    if existentes:
+        appointment_id = existentes[0]["id"]
+        sb.table("appointments").update({
+            "service":      inp["service"],
+            "scheduled_at": inp["scheduled_at"],
+        }).eq("id", appointment_id).execute()
+    else:
+        row = sb.table("appointments").insert({
+            "lead_id":      inp["lead_id"],
+            "tenant_id":    str(tenant["id"]),
+            "service":      inp["service"],
+            "scheduled_at": inp["scheduled_at"],
+        }).execute()
+        appointment_id = row.data[0]["id"]
+
+    resultado = {"success": True, "appointment_id": appointment_id}
 
     recall_info = _agendar_recall_se_configurado(sb, inp, tenant, phone)
     if recall_info:

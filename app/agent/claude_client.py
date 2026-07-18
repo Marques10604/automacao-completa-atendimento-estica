@@ -36,6 +36,17 @@ async def processar_mensagem(
     lead = mem.get_or_create_lead(tenant_id, identifier, canal)
     lead_id = str(lead["id"])
 
+    # Lead marcado como "frio" (deu SAIR antes) voltou a mandar mensagem por conta própria —
+    # reativa o estágio pra não ficar registrado como frio nos relatórios enquanto está
+    # conversando ativamente de novo. Não precisa de reset manual, nem a IA fica muda: ela
+    # simplesmente retoma o atendimento normalmente.
+    if lead.get("stage") == "frio":
+        sb = mem.get_client()
+        await asyncio.to_thread(
+            lambda: sb.table("leads").update({"stage": "novo"}).eq("id", lead_id).execute()
+        )
+        lead["stage"] = "novo"
+
     # Salvar mensagem do usuário (pulado se o chamador já salvou antes — caso do buffer
     # de rajada no webhook, que salva a mensagem na hora e só chama isso depois do debounce)
     if not ja_salvo:
