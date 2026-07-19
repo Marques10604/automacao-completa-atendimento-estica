@@ -1,5 +1,13 @@
 # main.py - FastAPI com webhook WhatsApp Cloud API
 
+from dotenv import load_dotenv
+
+# Precisa rodar antes de qualquer import interno — módulos como app.agent.claude_client
+# instanciam clientes (ex: AsyncAnthropic()) na hora do import, lendo os.environ nesse
+# momento. Se load_dotenv() rodar depois desses imports, ANTHROPIC_API_KEY ainda não
+# existe no processo e a autenticação falha.
+load_dotenv()
+
 import asyncio
 import hashlib
 import hmac
@@ -18,15 +26,12 @@ from app.limiter import limiter
 logger = logging.getLogger(__name__)
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
-from dotenv import load_dotenv
 
 from app.agent.claude_client import processar_mensagem
 import memory as mem
 from app.agent.dispatcher import send_message
 from app.webhooks.instagram import router as instagram_router
 from app.jobs.scheduler import get_scheduler
-
-load_dotenv()
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
@@ -245,13 +250,20 @@ async def webhook_whatsapp(request: Request):
     tenant_id = str(tenant["id"])
     key = f"{tenant_id}:{phone}"
 
-    # Salva a mensagem imediatamente — independe do debounce, garante que nada se perde.
-    mem.get_or_create_lead(tenant_id, phone, "whatsapp")
-    mem.save_message(tenant_id, phone, "user", mensagem)
-
+    # Cancela o debounce da mensagem anterior da mesma rajada JÁ, antes de qualquer
+    # trabalho lento — get_or_create_lead + save_message no Supabase levam ~3s no total
+    # (mais que os 2.5s do DEBOUNCE_SECONDS). Se o cancelamento só acontecesse depois
+    # dessas chamadas, o timer anterior tinha tempo de sobra pra disparar sozinho
+    # enquanto essa mensagem ainda estava sendo salva — gerando duas respostas pra uma
+    # rajada só. Cancelando primeiro, a corrida deixa de depender da latência do banco.
     anterior = _debounce_tasks.get(key)
     if anterior and not anterior.done():
         anterior.cancel()
+
+    # Salva a mensagem imediatamente — independe do debounce, garante que nada se perde.
+    # asyncio.to_thread pra não bloquear o event loop enquanto isso acontece.
+    await asyncio.to_thread(mem.get_or_create_lead, tenant_id, phone, "whatsapp")
+    await asyncio.to_thread(mem.save_message, tenant_id, phone, "user", mensagem)
 
     _debounce_tasks[key] = asyncio.create_task(_aguardar_e_processar(tenant, phone, mensagem, key))
 

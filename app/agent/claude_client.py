@@ -88,6 +88,7 @@ async def processar_mensagem(
     # mensagens no histórico (com o buffer de rajada, a primeira interação pode já
     # chegar com várias mensagens salvas de uma vez, então "len(historico) == 1" não
     # é mais confiável pra saber se é a primeira vez que falamos com esse lead).
+    primeira_mensagem = False
     try:
         sb = mem.get_client()
         existente = await asyncio.to_thread(
@@ -102,9 +103,32 @@ async def processar_mensagem(
                     "consent_text": "Opt-in implícito: lead iniciou conversa. LGPD informada na primeira mensagem.",
                 }).execute()
             )
+            primeira_mensagem = True
     except Exception as e:
         logger.error("Falha ao verificar/salvar consent_log para lead %s: %s", lead_id, e)
         # continua — falha de consent_log não deve interromper o atendimento
+
+    # O aviso de LGPD na 1a mensagem é determinístico, não delegado ao modelo: depender
+    # só do prompt deixava a IA às vezes já responder ao pedido do lead misturado com o
+    # aviso (ou pular o aviso). A pergunta original do lead fica pro próximo turno, depois
+    # que ele confirmar (nem que seja só continuando a conversa).
+    if primeira_mensagem:
+        professional_name = tenant.get("professional_name") or "Assistente Virtual"
+        clinic_name = tenant.get("clinic_name") or "Clínica"
+        resposta_lgpd = (
+            f"Oi! Aqui é a {professional_name}, da {clinic_name} 😊 Antes de começar, seguimos a LGPD: "
+            "suas informações são usadas apenas para este atendimento, e pra parar é só digitar SAIR. "
+            "Posso continuar?"
+        )
+        mem.save_message(tenant_id, identifier, "assistant", resposta_lgpd)
+        mem.update_session(tenant_id, identifier, lead.get("stage", "qualificacao"))
+        return {
+            "response":  resposta_lgpd,
+            "stage":     lead.get("stage", "qualificacao"),
+            "canal":     canal,
+            "tenant_id": tenant_id,
+            "lead_id":   lead_id,
+        }
 
     system_prompt = _get_system_prompt(tenant, canal)
     mensagens_api = [{"role": m["role"], "content": m["content"]} for m in historico]

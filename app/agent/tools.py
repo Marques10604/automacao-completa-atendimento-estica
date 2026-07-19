@@ -21,7 +21,7 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "lead_id":      {"type": "string"},
                 "service":      {"type": "string", "description": "Nome do procedimento"},
-                "scheduled_at": {"type": "string", "description": "ISO 8601: 2026-04-20T14:00:00"},
+                "scheduled_at": {"type": "string", "description": "Horário LOCAL de Fortaleza (UTC-3), ISO 8601 sem offset: 2026-04-20T14:00:00. Não inclua timezone — o sistema já assume America/Fortaleza."},
             },
             "required": ["lead_id", "service", "scheduled_at"],
         },
@@ -97,7 +97,22 @@ TOOL_DEFINITIONS = [
 
 import httpx
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import memory as mem
+
+FORTALEZA_TZ = ZoneInfo("America/Fortaleza")
+
+
+def _localizar_scheduled_at(raw: str) -> str:
+    """A tool book_appointment pede horário local de Fortaleza sem offset (ex:
+    "2026-07-21T11:00:00"). Sem isso, o Postgres grava esse valor como se já fosse
+    UTC, jogando o agendamento 3h pra frente do horário real combinado. Aqui a
+    gente interpreta qualquer string sem timezone como America/Fortaleza antes de
+    devolver o ISO 8601 (com offset correto) que vai pro banco."""
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=FORTALEZA_TZ)
+    return dt.isoformat()
 
 
 async def execute_tool(tool_name: str, tool_input: dict, tenant: dict, phone: str) -> dict:
@@ -167,6 +182,7 @@ async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
 
 async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
     sb = mem.get_client()
+    scheduled_at = _localizar_scheduled_at(inp["scheduled_at"])
 
     # Evita duplicar: se o lead já tem um agendamento futuro em aberto, atualiza em vez de
     # inserir outro (acontece quando o lead confirma de novo depois de já confirmado).
@@ -185,27 +201,27 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
         appointment_id = existentes[0]["id"]
         sb.table("appointments").update({
             "service":      inp["service"],
-            "scheduled_at": inp["scheduled_at"],
+            "scheduled_at": scheduled_at,
         }).eq("id", appointment_id).execute()
     else:
         row = sb.table("appointments").insert({
             "lead_id":      inp["lead_id"],
             "tenant_id":    str(tenant["id"]),
             "service":      inp["service"],
-            "scheduled_at": inp["scheduled_at"],
+            "scheduled_at": scheduled_at,
         }).execute()
         appointment_id = row.data[0]["id"]
 
     resultado = {"success": True, "appointment_id": appointment_id}
 
-    recall_info = _agendar_recall_se_configurado(sb, inp, tenant, phone)
+    recall_info = _agendar_recall_se_configurado(sb, inp, tenant, phone, scheduled_at)
     if recall_info:
         resultado["recall_agendado"] = recall_info
 
     return resultado
 
 
-def _agendar_recall_se_configurado(sb, inp: dict, tenant: dict, phone: str) -> dict | None:
+def _agendar_recall_se_configurado(sb, inp: dict, tenant: dict, phone: str, scheduled_at_localizado: str) -> dict | None:
     """
     Se o tenant tiver configurado procedimentos_recall (JSONB: {"nome do procedimento": dias}),
     procura o serviço agendado nesse mapa (case-insensitive, por substring) e já cria
@@ -235,11 +251,7 @@ def _agendar_recall_se_configurado(sb, inp: dict, tenant: dict, phone: str) -> d
         logger.info("Nenhuma regra de recall bate com o serviço '%s' — recall não agendado", servico)
         return None
 
-    try:
-        agendamento_em = datetime.fromisoformat(inp["scheduled_at"])
-    except (ValueError, TypeError):
-        agendamento_em = datetime.now(timezone.utc)
-
+    agendamento_em = datetime.fromisoformat(scheduled_at_localizado)
     scheduled_at = (agendamento_em + timedelta(days=int(dias_recall))).isoformat()
 
     row = sb.table("followup_jobs").insert({
