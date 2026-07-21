@@ -102,6 +102,24 @@ import memory as mem
 
 FORTALEZA_TZ = ZoneInfo("America/Fortaleza")
 
+_DIAS_SEMANA_KEYS = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"]  # datetime.weekday(): 0=segunda
+
+# Formato esperado em tenants.horarios (JSONB) — um horário [abertura, fechamento] em
+# "HH:MM" por dia da semana, ou null se fechado nesse dia (ver database/migration_v6.sql).
+# Usado como fallback quando o tenant não tem horarios configurado nesse formato ainda.
+DEFAULT_HORARIOS = {
+    "seg": ["09:00", "19:00"],
+    "ter": ["09:00", "19:00"],
+    "qua": ["09:00", "19:00"],
+    "qui": ["09:00", "19:00"],
+    "sex": ["09:00", "19:00"],
+    "sab": ["09:00", "14:00"],
+    "dom": None,
+}
+
+SLOT_DURATION_MINUTES = 60  # appointments não tem coluna de duração — cada agendamento
+# ocupa um slot inteiro desse tamanho pra fins de checagem de colisão.
+
 
 def _localizar_scheduled_at(raw: str) -> str:
     """A tool book_appointment pede horário local de Fortaleza sem offset (ex:
@@ -137,14 +155,6 @@ async def execute_tool(tool_name: str, tool_input: dict, tenant: dict, phone: st
 
 
 async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
-    # TODO(prod): integrar com Google Calendar ou tabela availability no Supabase
-    # Ainda é mock — mas gera horários plausíveis (não repete o input, respeita
-    # horário comercial e não sugere fim de semana) pra servir de demo decente
-    # até existir o primeiro cliente real. NÃO usar com cliente pagante.
-    import logging
-    import random
-    logging.getLogger(__name__).warning("_check_availability: retornando dados mock — não usar em produção com cliente real")
-
     date_str = inp.get("date", "")
     parsed_date = None
     for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
@@ -154,29 +164,92 @@ async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
         except (ValueError, TypeError):
             continue
 
-    # Se caiu num domingo, empurra pra segunda — clínica não abre domingo
-    if parsed_date and parsed_date.weekday() == 6:
-        parsed_date = parsed_date + timedelta(days=1)
+    if not parsed_date:
+        return {
+            "available": False,
+            "slots": [],
+            "message": f"Não entendi a data '{date_str}'. Pode confirmar no formato DD/MM/AAAA?",
+        }
 
-    display_date = parsed_date.strftime("%d/%m/%Y") if parsed_date else date_str
+    display_date = parsed_date.strftime("%d/%m/%Y")
+    weekday_key = _DIAS_SEMANA_KEYS[parsed_date.weekday()]
 
-    business_hours = ["09:00", "10:30", "11:00", "14:00", "15:30", "16:00", "17:00"]
-    # Sábado só até meio-dia
-    if parsed_date and parsed_date.weekday() == 5:
-        business_hours = ["09:00", "10:00", "11:00"]
+    horarios = tenant.get("horarios")
+    if not isinstance(horarios, dict):
+        horarios = DEFAULT_HORARIOS
 
+    expediente = horarios.get(weekday_key)
+    if not expediente or not isinstance(expediente, (list, tuple)) or len(expediente) != 2:
+        return {
+            "available": False,
+            "slots": [],
+            "message": f"Não atendemos em {display_date} (fechado nesse dia).",
+        }
+
+    duracao = timedelta(minutes=SLOT_DURATION_MINUTES)
+    abertura_str, fechamento_str = expediente
+    abertura = datetime.combine(parsed_date.date(), datetime.strptime(abertura_str, "%H:%M").time(), tzinfo=FORTALEZA_TZ)
+    fechamento = datetime.combine(parsed_date.date(), datetime.strptime(fechamento_str, "%H:%M").time(), tzinfo=FORTALEZA_TZ)
+
+    candidatos = []
+    cursor = abertura
+    while cursor + duracao <= fechamento:
+        candidatos.append(cursor)
+        cursor += duracao
+
+    if not candidatos:
+        return {
+            "available": False,
+            "slots": [],
+            "message": f"Não atendemos em {display_date} (fechado nesse dia).",
+        }
+
+    # Busca agendamentos já existentes nesse dia (limites do dia em horário de Fortaleza,
+    # convertidos pro instante UTC correspondente — scheduled_at é gravado em UTC por
+    # _localizar_scheduled_at).
+    dia_inicio = datetime.combine(parsed_date.date(), datetime.min.time(), tzinfo=FORTALEZA_TZ)
+    dia_fim = dia_inicio + timedelta(days=1)
+
+    sb = mem.get_client()
+    ocupados_raw = (
+        sb.table("appointments")
+        .select("scheduled_at")
+        .eq("tenant_id", str(tenant["id"]))
+        .gte("scheduled_at", dia_inicio.isoformat())
+        .lt("scheduled_at", dia_fim.isoformat())
+        .execute()
+    ).data or []
+    ocupados = [datetime.fromisoformat(r["scheduled_at"]).astimezone(FORTALEZA_TZ) for r in ocupados_raw]
+
+    def _colide(inicio_candidato: datetime) -> bool:
+        fim_candidato = inicio_candidato + duracao
+        for ocupado_inicio in ocupados:
+            ocupado_fim = ocupado_inicio + duracao
+            if inicio_candidato < ocupado_fim and ocupado_inicio < fim_candidato:
+                return True
+        return False
+
+    livres = [c.strftime("%H:%M") for c in candidatos if not _colide(c)]
+
+    if not livres:
+        return {
+            "available": False,
+            "slots": [],
+            "message": f"Não temos horários livres em {display_date}. Quer tentar outro dia?",
+        }
+
+    # Se o horário pedido está entre os livres, prioriza ele como primeira opção
     requested_time = inp.get("time", "").strip()
-    slots = random.sample(business_hours, k=min(3, len(business_hours)))
-    slots.sort()
+    if requested_time and requested_time in livres:
+        livres.remove(requested_time)
+        livres.insert(0, requested_time)
 
-    # Se o horário pedido bate com algo plausível, prioriza ele como primeira opção
-    if requested_time and requested_time not in slots:
-        slots = [requested_time] + slots[:2]
+    exibidos = livres[:5]
 
     return {
         "available": True,
-        "slots": [f"{display_date} às {s}" for s in slots],
-        "message": f"Temos esses horários livres em {display_date}: {', '.join(slots)}.",
+        "slots": [f"{display_date} às {s}" for s in exibidos],
+        "message": f"Temos esses horários livres em {display_date}: {', '.join(exibidos)}.",
     }
 
 
@@ -197,20 +270,34 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
         .execute()
     ).data
 
-    if existentes:
-        appointment_id = existentes[0]["id"]
-        sb.table("appointments").update({
-            "service":      inp["service"],
-            "scheduled_at": scheduled_at,
-        }).eq("id", appointment_id).execute()
-    else:
-        row = sb.table("appointments").insert({
-            "lead_id":      inp["lead_id"],
-            "tenant_id":    str(tenant["id"]),
-            "service":      inp["service"],
-            "scheduled_at": scheduled_at,
-        }).execute()
-        appointment_id = row.data[0]["id"]
+    # appointments tem UNIQUE (tenant_id, scheduled_at) — database/migration_v6.sql — pra
+    # impedir dois leads diferentes fecharem o mesmo horário numa corrida (ex: ambos
+    # chamam check_availability, veem o mesmo slot livre, e confirmam quase ao mesmo
+    # tempo). O Postgres rejeita a segunda tentativa; aqui a gente devolve isso como
+    # resposta tratada em vez de deixar a exceção crua estourar pro lead.
+    try:
+        if existentes:
+            appointment_id = existentes[0]["id"]
+            sb.table("appointments").update({
+                "service":      inp["service"],
+                "scheduled_at": scheduled_at,
+            }).eq("id", appointment_id).execute()
+        else:
+            row = sb.table("appointments").insert({
+                "lead_id":      inp["lead_id"],
+                "tenant_id":    str(tenant["id"]),
+                "service":      inp["service"],
+                "scheduled_at": scheduled_at,
+            }).execute()
+            appointment_id = row.data[0]["id"]
+    except Exception as e:
+        if "duplicate key" in str(e).lower() or "23505" in str(e):
+            return {
+                "success": False,
+                "error":   "horario_indisponivel",
+                "message": "Esse horário acabou de ser reservado por outra pessoa. Pode escolher outro horário?",
+            }
+        raise
 
     resultado = {"success": True, "appointment_id": appointment_id}
 
