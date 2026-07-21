@@ -33,6 +33,7 @@ from app.agent.dispatcher import send_message
 from app.webhooks.instagram import router as instagram_router
 from app.jobs.scheduler import get_scheduler
 from app.services.failure_service import registrar_falha, escalar_por_falhas
+from app.webhooks.media_fallback import resposta_midia_nao_suportada
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
@@ -275,6 +276,10 @@ async def webhook_whatsapp(request: Request):
     outra mensagem do mesmo número em menos de DEBOUNCE_SECONDS, o processamento
     anterior é cancelado e substituído, evitando respostas concorrentes/duplicadas.
 
+    Mensagens não-texto (áudio, foto, documento, ...) ainda não são processadas
+    pela IA — o lead recebe um aviso educado e a tentativa fica marcada no
+    histórico, em vez de cair em silêncio total.
+
     Payload esperado:
     { "entry": [{ "changes": [{ "value": {
         "metadata": { "phone_number_id": "..." },
@@ -292,10 +297,10 @@ async def webhook_whatsapp(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON inválido")
 
-    phone, mensagem, phone_number_id, wamid = _extrair_mensagem_whatsapp(body)
+    phone, mensagem, phone_number_id, wamid, tipo = _extrair_mensagem_whatsapp(body)
 
-    if not phone or not mensagem:
-        return JSONResponse(content={"status": "ignorado", "motivo": "mensagem sem texto"})
+    if not phone:
+        return JSONResponse(content={"status": "ignorado", "motivo": "sem remetente"})
 
     if mem.is_duplicate_message(wamid):
         logger.info("Mensagem duplicada ignorada: wamid=%s phone=%s", wamid, phone)
@@ -309,6 +314,22 @@ async def webhook_whatsapp(request: Request):
         )
 
     tenant_id = str(tenant["id"])
+
+    # Mídia (áudio, foto, documento, ...) ainda não é processada pela IA — sem isso o
+    # lead ficava em silêncio total (#B1 fase 1). Avisa, marca no histórico o que
+    # chegou (pra IA ter contexto se o lead explicar por texto depois) e não entra
+    # no pipeline normal (não tem texto pra debounce/Claude processarem).
+    if tipo and tipo != "text":
+        rotulo, texto_resposta = resposta_midia_nao_suportada(tipo)
+        await asyncio.to_thread(mem.get_or_create_lead, tenant_id, phone, "whatsapp")
+        await asyncio.to_thread(mem.save_message, tenant_id, phone, "user", f"[lead enviou {rotulo}]")
+        if await _enviar_com_retry(phone, texto_resposta, tenant):
+            await asyncio.to_thread(mem.save_message, tenant_id, phone, "assistant", texto_resposta)
+        return JSONResponse(content={"status": "midia_nao_suportada", "tipo": tipo, "phone": phone})
+
+    if not mensagem:
+        return JSONResponse(content={"status": "ignorado", "motivo": "mensagem sem texto"})
+
     key = f"{tenant_id}:{phone}"
 
     # Cancela o debounce da mensagem anterior da mesma rajada JÁ, antes de qualquer
@@ -331,21 +352,25 @@ async def webhook_whatsapp(request: Request):
     return JSONResponse(content={"status": "recebido", "phone": phone})
 
 
-def _extrair_mensagem_whatsapp(body: dict) -> tuple[str, str, str, str]:
-    """Extrai phone, mensagem, phone_number_id e wamid (ID único da mensagem) do payload WhatsApp Cloud API."""
+def _extrair_mensagem_whatsapp(body: dict) -> tuple[str, str, str, str, str]:
+    """Extrai phone, mensagem, phone_number_id, wamid e tipo (text/audio/image/document/...)
+    do payload WhatsApp Cloud API. Mensagens não-texto vêm com mensagem vazia mas tipo
+    preenchido — quem chama decide o que fazer (avisa o lead que só processamos texto
+    ainda, em vez de descartar em silêncio)."""
     try:
         value = body["entry"][0]["changes"][0]["value"]
         phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
         messages = value.get("messages", [])
         if not messages:
-            return "", "", phone_number_id, ""
+            return "", "", phone_number_id, "", ""
         msg = messages[0]
         phone = msg["from"]
-        mensagem = msg.get("text", {}).get("body", "").strip()
+        tipo = msg.get("type", "")
+        mensagem = msg.get("text", {}).get("body", "").strip() if tipo == "text" else ""
         wamid = msg.get("id", "")
-        return phone, mensagem, phone_number_id, wamid
+        return phone, mensagem, phone_number_id, wamid, tipo
     except (KeyError, IndexError, TypeError):
-        return "", "", "", ""
+        return "", "", "", "", ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
