@@ -32,6 +32,7 @@ import memory as mem
 from app.agent.dispatcher import send_message
 from app.webhooks.instagram import router as instagram_router
 from app.jobs.scheduler import get_scheduler
+from app.services.failure_service import registrar_falha, escalar_por_falhas
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
@@ -150,34 +151,94 @@ def _validar_assinatura_meta(payload: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(expected, signature_header[7:])
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# OBSERVABILIDADE DE FALHA — nunca deixa o lead em silêncio, sempre registra
+# ─────────────────────────────────────────────────────────────────────────────
+FALLBACK_INDISPONIVEL = "Tive um imprevisto aqui, já volto! 💛"
+ENVIO_MAX_TENTATIVAS = 3          # 1 tentativa original + 2 retries
+ENVIO_BACKOFF_SEGUNDOS = [1, 2]   # pausa curta antes de cada retry
+FALHAS_CONSECUTIVAS_PARA_ESCALAR = 3
+
+
+async def _enviar_com_retry(phone: str, texto: str, tenant: dict) -> bool:
+    """Tenta enviar até ENVIO_MAX_TENTATIVAS vezes, com pausa curta entre elas.
+    Devolve True se algum envio deu certo, False se todas as tentativas falharam."""
+    for tentativa in range(ENVIO_MAX_TENTATIVAS):
+        try:
+            await send_message(channel="whatsapp", phone=phone, ig_user_id="", text=texto, tenant=tenant)
+            return True
+        except Exception as e:
+            logger.error("Falha ao enviar (tentativa %d/%d) para %s: %s", tentativa + 1, ENVIO_MAX_TENTATIVAS, phone, e)
+            if tentativa < len(ENVIO_BACKOFF_SEGUNDOS):
+                await asyncio.sleep(ENVIO_BACKOFF_SEGUNDOS[tentativa])
+    return False
+
+
+async def _tentar_enviar_fallback(phone: str, tenant: dict) -> bool:
+    """Uma única tentativa (não usa o retry de _enviar_com_retry — se o envio já
+    está com problema, insistir 3x no fallback só adiciona latência sem ganho)."""
+    try:
+        await send_message(channel="whatsapp", phone=phone, ig_user_id="", text=FALLBACK_INDISPONIVEL, tenant=tenant)
+        return True
+    except Exception as e:
+        logger.error("Falha ao enviar fallback de indisponibilidade para %s: %s", phone, e)
+        return False
+
+
+async def _registrar_falha_e_escalar(tenant: dict, phone: str, tipo_falha: str, detalhe: str, lead_id: str | None) -> None:
+    """Grava a falha em agent_failures; se o lead acumulou falhas demais numa
+    janela curta, escala pra humano e notifica staff_phone."""
+    if lead_id is None:
+        try:
+            lead = await asyncio.to_thread(mem.get_or_create_lead, str(tenant["id"]), phone, "whatsapp")
+            lead_id = str(lead["id"])
+        except Exception as e:
+            logger.error("Não consegui recuperar lead_id pra registrar falha de %s: %s", phone, e)
+
+    qtd = await asyncio.to_thread(
+        registrar_falha, str(tenant["id"]), lead_id, phone, "whatsapp", tipo_falha, detalhe,
+    )
+    if lead_id and qtd >= FALHAS_CONSECUTIVAS_PARA_ESCALAR:
+        await escalar_por_falhas(tenant, lead_id, phone, motivo=f"{qtd} falhas consecutivas ({tipo_falha})")
+
+
 async def _processar_e_responder_whatsapp(tenant: dict, phone: str, mensagem: str, ja_salvo: bool = False) -> None:
     """Roda em background (após o 200 já ter sido devolvido pra Meta): processa a
-    mensagem com a Claude e envia a resposta pelo WhatsApp."""
+    mensagem com a Claude e envia a resposta pelo WhatsApp. A resposta só é salva
+    no histórico depois que o envio é confirmado — nunca antes, pra não registrar
+    que o lead recebeu algo que na verdade falhou."""
     try:
         resultado = await processar_mensagem(
             tenant=tenant,
             phone=phone,
             mensagem_usuario=mensagem,
             ja_salvo=ja_salvo,
+            salvar_resposta=False,
         )
     except Exception as e:
         logger.error("Falha ao processar mensagem WA de %s: %s", phone, e)
+        await _registrar_falha_e_escalar(tenant, phone, "processamento", str(e), lead_id=None)
+        if await _tentar_enviar_fallback(phone, tenant):
+            await asyncio.to_thread(mem.save_message, str(tenant["id"]), phone, "assistant", FALLBACK_INDISPONIVEL)
         return
 
     if resultado.get("escalado"):
         # Atendimento assumido por humano — a IA fica muda, não envia nada.
         return
 
-    try:
-        await send_message(
-            channel="whatsapp",
-            phone=phone,
-            ig_user_id="",
-            text=resultado["response"],
-            tenant=tenant,
-        )
-    except Exception as e:
-        logger.error("Falha ao enviar resposta WA para %s: %s", phone, e)
+    texto = resultado.get("response", "")
+    if not texto:
+        return
+
+    if await _enviar_com_retry(phone, texto, tenant):
+        await asyncio.to_thread(mem.save_message, resultado["tenant_id"], phone, "assistant", texto)
+        return
+
+    await _registrar_falha_e_escalar(
+        tenant, phone, "envio", "Falha ao enviar resposta via WhatsApp após retries", lead_id=resultado.get("lead_id"),
+    )
+    if await _tentar_enviar_fallback(phone, tenant):
+        await asyncio.to_thread(mem.save_message, resultado["tenant_id"], phone, "assistant", FALLBACK_INDISPONIVEL)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

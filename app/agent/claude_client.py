@@ -29,6 +29,7 @@ async def processar_mensagem(
     canal: str = "whatsapp",
     ig_user_id: str = "",
     ja_salvo: bool = False,
+    salvar_resposta: bool = True,
 ) -> dict:
     tenant_id = str(tenant["id"])
     identifier = phone or ig_user_id
@@ -72,7 +73,8 @@ async def processar_mensagem(
             lambda: sb.table("leads").update({"stage": "frio"}).eq("id", lead_id).execute()
         )
         resposta_sair = "Entendido! Removemos seus dados do nosso sistema. Se quiser retornar, é só nos chamar. 💛"
-        mem.save_message(tenant_id, identifier, "assistant", resposta_sair)
+        if salvar_resposta:
+            mem.save_message(tenant_id, identifier, "assistant", resposta_sair)
         return {
             "response":  resposta_sair,
             "stage":     "frio",
@@ -120,7 +122,8 @@ async def processar_mensagem(
             "suas informações são usadas apenas para este atendimento, e pra parar é só digitar SAIR. "
             "Posso continuar?"
         )
-        mem.save_message(tenant_id, identifier, "assistant", resposta_lgpd)
+        if salvar_resposta:
+            mem.save_message(tenant_id, identifier, "assistant", resposta_lgpd)
         mem.update_session(tenant_id, identifier, lead.get("stage", "qualificacao"))
         return {
             "response":  resposta_lgpd,
@@ -144,7 +147,7 @@ async def processar_mensagem(
 
         if resposta.stop_reason == "end_turn":
             texto = next((b.text for b in resposta.content if hasattr(b, "text")), "")
-            if texto:  # guard: não salvar resposta vazia
+            if texto and salvar_resposta:  # guard: não salvar resposta vazia
                 mem.save_message(tenant_id, identifier, "assistant", texto)
             mem.update_session(tenant_id, identifier, lead.get("stage", "qualificacao"))
             return {
