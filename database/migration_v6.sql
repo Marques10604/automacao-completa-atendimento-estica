@@ -4,7 +4,39 @@
 -- Execute no SQL Editor do Supabase DEPOIS de schema.sql e migration_v2.sql
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- 1. Impede dois leads fecharem o mesmo horário na mesma clínica (corrida: ambos
+-- 1a. Dedup necessário ANTES do UNIQUE: o _check_availability antigo (mock, sempre
+--     "disponível") deixou passar overbooking real em produção — linhas diferentes
+--     de appointments com o mesmo (tenant_id, scheduled_at), às vezes de leads
+--     diferentes. Sem remover essas duplicatas, o CREATE UNIQUE INDEX abaixo falha
+--     com 23505 (unique_violation) na hora de construir o índice.
+--     Mantém, em cada grupo (tenant_id, scheduled_at), só a linha de created_at mais
+--     antigo; apaga as demais. Em grupos sem duplicata, ROW_NUMBER()=1 pra linha
+--     única e nada é removido — idempotente em bases já limpas.
+--     ATENÇÃO: isso apaga appointments de verdade. Rode antes a query de auditoria
+--     (SELECT ... GROUP BY tenant_id, scheduled_at HAVING COUNT(*) > 1) e confirme
+--     que as linhas removidas não correspondem a clientes reais que precisam ser
+--     recontatados pra remarcar — no ambiente onde esta migration foi escrita eram
+--     todos dados de teste.
+DELETE FROM appointments a
+USING (
+  SELECT id,
+         ROW_NUMBER() OVER (
+           PARTITION BY tenant_id, scheduled_at
+           ORDER BY created_at ASC
+         ) AS rn
+  FROM appointments
+) ranked
+WHERE a.id = ranked.id
+  AND ranked.rn > 1;
+
+-- 1b. Confirma que a limpeza acima funcionou — deve devolver zero linhas antes de
+--     seguir pro ALTER TABLE. Se devolver algo, pare e investigue antes de continuar.
+SELECT tenant_id, scheduled_at, COUNT(*)
+FROM appointments
+GROUP BY tenant_id, scheduled_at
+HAVING COUNT(*) > 1;
+
+-- 1c. Impede dois leads fecharem o mesmo horário na mesma clínica (corrida: ambos
 --    chamam check_availability, veem o mesmo slot livre, confirmam quase ao mesmo
 --    tempo). Com esse constraint, a segunda tentativa de INSERT/UPDATE em
 --    appointments pro mesmo (tenant_id, scheduled_at) é rejeitada pelo Postgres —
