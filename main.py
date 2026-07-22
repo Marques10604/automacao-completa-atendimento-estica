@@ -33,7 +33,10 @@ from app.agent.dispatcher import send_message
 from app.webhooks.instagram import router as instagram_router
 from app.jobs.scheduler import get_scheduler
 from app.services.failure_service import registrar_falha, escalar_por_falhas
+from app.services.transcription_service import transcrever_audio_whatsapp
+from app.services.report_service import detectar_comando_relatorio, montar_relatorio, remetente_e_staff
 from app.webhooks.media_fallback import resposta_midia_nao_suportada
+from app.config import settings
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
@@ -264,6 +267,32 @@ async def _aguardar_e_processar(tenant: dict, phone: str, mensagem: str, key: st
     await _processar_e_responder_whatsapp(tenant, phone, mensagem, ja_salvo=True)
 
 
+async def _transcrever_e_processar(tenant: dict, phone: str, media_id: str, key: str) -> None:
+    """Transcreve a nota de voz e injeta o texto no mesmo pipeline das mensagens
+    digitadas. Se a transcrição falhar (Groq fora do ar, chave ausente, áudio grande
+    demais), cai no aviso educado de mídia não suportada — o lead nunca fica mudo."""
+    tenant_id = str(tenant["id"])
+    wa_token = tenant.get("whatsapp_token") or settings.meta_wa_token
+
+    texto = await transcrever_audio_whatsapp(media_id, wa_token)
+
+    if not texto:
+        rotulo, texto_resposta = resposta_midia_nao_suportada("audio")
+        await asyncio.to_thread(mem.save_message, tenant_id, phone, "user", f"[lead enviou {rotulo}]")
+        if await _enviar_com_retry(phone, texto_resposta, tenant):
+            await asyncio.to_thread(mem.save_message, tenant_id, phone, "assistant", texto_resposta)
+        return
+
+    # Daqui pra frente é idêntico ao caminho de texto: salva no histórico e entra no
+    # debounce, pra áudio seguido de texto na mesma rajada virar uma resposta só.
+    await asyncio.to_thread(mem.save_message, tenant_id, phone, "user", texto)
+
+    anterior = _debounce_tasks.get(key)
+    if anterior and not anterior.done():
+        anterior.cancel()
+    _debounce_tasks[key] = asyncio.create_task(_aguardar_e_processar(tenant, phone, texto, key))
+
+
 @app.post("/webhook/whatsapp")
 @limiter.limit("10/minute")
 async def webhook_whatsapp(request: Request):
@@ -297,7 +326,7 @@ async def webhook_whatsapp(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON inválido")
 
-    phone, mensagem, phone_number_id, wamid, tipo = _extrair_mensagem_whatsapp(body)
+    phone, mensagem, phone_number_id, wamid, tipo, media_id = _extrair_mensagem_whatsapp(body)
 
     if not phone:
         return JSONResponse(content={"status": "ignorado", "motivo": "sem remetente"})
@@ -315,9 +344,20 @@ async def webhook_whatsapp(request: Request):
 
     tenant_id = str(tenant["id"])
 
-    # Mídia (áudio, foto, documento, ...) ainda não é processada pela IA — sem isso o
-    # lead ficava em silêncio total (#B1 fase 1). Avisa, marca no histórico o que
-    # chegou (pra IA ter contexto se o lead explicar por texto depois) e não entra
+    # Áudio vira texto e segue como mensagem normal (#B1 fase 2). A transcrição roda em
+    # background porque baixar da Graph API + chamar a Groq leva alguns segundos: se o
+    # 200 demorasse, a Meta reenviaria o webhook, e o reenvio seria descartado pelo
+    # dedup de wamid logo acima — o áudio se perderia justamente por demorar.
+    if tipo in ("audio", "voice") and media_id:
+        await asyncio.to_thread(mem.get_or_create_lead, tenant_id, phone, "whatsapp")
+        asyncio.create_task(
+            _transcrever_e_processar(tenant, phone, media_id, f"{tenant_id}:{phone}")
+        )
+        return JSONResponse(content={"status": "audio_recebido", "phone": phone})
+
+    # Demais mídias (foto, documento, vídeo) ainda não são processadas pela IA — sem
+    # isso o lead ficava em silêncio total (#B1 fase 1). Avisa, marca no histórico o
+    # que chegou (pra IA ter contexto se o lead explicar por texto depois) e não entra
     # no pipeline normal (não tem texto pra debounce/Claude processarem).
     if tipo and tipo != "text":
         rotulo, texto_resposta = resposta_midia_nao_suportada(tipo)
@@ -329,6 +369,20 @@ async def webhook_whatsapp(request: Request):
 
     if not mensagem:
         return JSONResponse(content={"status": "ignorado", "motivo": "mensagem sem texto"})
+
+    # Dono/equipe pedindo relatório. Fica ANTES de get_or_create_lead de propósito: o
+    # dono não pode virar lead no funil nem sujar o histórico de conversa com mensagem
+    # administrativa. Os números saem direto do Supabase, sem passar pelo modelo —
+    # relatório com número inventado destruiria a confiança no produto.
+    if remetente_e_staff(phone, tenant):
+        periodo = detectar_comando_relatorio(mensagem)
+        if periodo:
+            texto_relatorio = await asyncio.to_thread(montar_relatorio, tenant, periodo)
+            enviado = await _enviar_com_retry(phone, texto_relatorio, tenant)
+            return JSONResponse(content={
+                "status": "relatorio_enviado" if enviado else "relatorio_falhou",
+                "periodo": periodo,
+            })
 
     key = f"{tenant_id}:{phone}"
 
@@ -352,25 +406,26 @@ async def webhook_whatsapp(request: Request):
     return JSONResponse(content={"status": "recebido", "phone": phone})
 
 
-def _extrair_mensagem_whatsapp(body: dict) -> tuple[str, str, str, str, str]:
-    """Extrai phone, mensagem, phone_number_id, wamid e tipo (text/audio/image/document/...)
-    do payload WhatsApp Cloud API. Mensagens não-texto vêm com mensagem vazia mas tipo
-    preenchido — quem chama decide o que fazer (avisa o lead que só processamos texto
-    ainda, em vez de descartar em silêncio)."""
+def _extrair_mensagem_whatsapp(body: dict) -> tuple[str, str, str, str, str, str]:
+    """Extrai phone, mensagem, phone_number_id, wamid, tipo (text/audio/image/...) e
+    media_id do payload WhatsApp Cloud API. Mensagens não-texto vêm com mensagem vazia
+    mas tipo preenchido — quem chama decide o que fazer. Áudio ainda traz o media_id,
+    que é o que permite baixar a nota de voz da Graph API pra transcrever."""
     try:
         value = body["entry"][0]["changes"][0]["value"]
         phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
         messages = value.get("messages", [])
         if not messages:
-            return "", "", phone_number_id, "", ""
+            return "", "", phone_number_id, "", "", ""
         msg = messages[0]
         phone = msg["from"]
         tipo = msg.get("type", "")
         mensagem = msg.get("text", {}).get("body", "").strip() if tipo == "text" else ""
         wamid = msg.get("id", "")
-        return phone, mensagem, phone_number_id, wamid, tipo
+        media_id = msg.get(tipo, {}).get("id", "") if tipo in ("audio", "voice") else ""
+        return phone, mensagem, phone_number_id, wamid, tipo, media_id
     except (KeyError, IndexError, TypeError):
-        return "", "", "", "", ""
+        return "", "", "", "", "", ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

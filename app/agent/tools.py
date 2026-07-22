@@ -27,6 +27,22 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "cancel_appointment",
+        "description": (
+            "Cancela o próximo agendamento do lead. Use quando ele disser claramente que "
+            "não vai mais (cancelar, desmarcar, desistir). Para TROCAR de data/horário não "
+            "use isso — chame book_appointment com o horário novo, que remarca sozinho."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string"},
+                "motivo":  {"type": "string", "description": "Motivo dito pelo lead, se ele explicou. Opcional."},
+            },
+            "required": ["lead_id"],
+        },
+    },
+    {
         "name": "generate_payment_link",
         "description": "Gera link de pagamento Pix ou cartão via Asaas. Só use após qualificação confirmada.",
         "input_schema": {
@@ -137,6 +153,7 @@ async def execute_tool(tool_name: str, tool_input: dict, tenant: dict, phone: st
     dispatch = {
         "check_availability":    _check_availability,
         "book_appointment":      _book_appointment,
+        "cancel_appointment":    _cancel_appointment,
         "generate_payment_link": _generate_payment_link,
         "migrate_to_whatsapp":   _migrate_to_whatsapp,
         "update_lead_status":    _update_lead_status,
@@ -215,6 +232,7 @@ async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
         sb.table("appointments")
         .select("scheduled_at")
         .eq("tenant_id", str(tenant["id"]))
+        .is_("cancelled_at", "null")  # horário cancelado volta a ser vendável
         .gte("scheduled_at", dia_inicio.isoformat())
         .lt("scheduled_at", dia_fim.isoformat())
         .execute()
@@ -258,12 +276,15 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
     scheduled_at = _localizar_scheduled_at(inp["scheduled_at"])
 
     # Evita duplicar: se o lead já tem um agendamento futuro em aberto, atualiza em vez de
-    # inserir outro (acontece quando o lead confirma de novo depois de já confirmado).
+    # inserir outro (acontece quando o lead confirma de novo depois de já confirmado, e
+    # também quando ele pede pra trocar de data — é assim que remarcação funciona).
+    # Agendamento cancelado não conta: senão um UPDATE ressuscitaria a linha cancelada.
     agora = datetime.now(timezone.utc).isoformat()
     existentes = (
         sb.table("appointments")
-        .select("id")
+        .select("id, scheduled_at")
         .eq("lead_id", inp["lead_id"])
+        .is_("cancelled_at", "null")
         .gte("scheduled_at", agora)
         .order("scheduled_at", desc=False)
         .limit(1)
@@ -275,9 +296,11 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
     # chamam check_availability, veem o mesmo slot livre, e confirmam quase ao mesmo
     # tempo). O Postgres rejeita a segunda tentativa; aqui a gente devolve isso como
     # resposta tratada em vez de deixar a exceção crua estourar pro lead.
+    remarcado = False
     try:
         if existentes:
             appointment_id = existentes[0]["id"]
+            remarcado = not _mesmo_instante(existentes[0].get("scheduled_at"), scheduled_at)
             sb.table("appointments").update({
                 "service":      inp["service"],
                 "scheduled_at": scheduled_at,
@@ -299,13 +322,104 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
             }
         raise
 
-    resultado = {"success": True, "appointment_id": appointment_id}
+    resultado = {"success": True, "appointment_id": appointment_id, "remarcado": remarcado}
+
+    # Remarcou: o lembrete que já existia foi calculado pra data ANTIGA e dispararia no
+    # dia errado ("seu agendamento é amanhã" sobre um horário que não existe mais).
+    # Cancela o antigo aqui; o novo é criado pelo schedule_followup logo em seguida.
+    if remarcado:
+        resultado["lembretes_antigos_cancelados"] = _cancelar_lembretes_pendentes(sb, inp["lead_id"])
 
     recall_info = _agendar_recall_se_configurado(sb, inp, tenant, phone, scheduled_at)
     if recall_info:
         resultado["recall_agendado"] = recall_info
 
     return resultado
+
+
+def _mesmo_instante(anterior: str | None, novo: str) -> bool:
+    """Compara dois timestamps ISO como instantes, não como texto — o Postgres devolve
+    a data num formato de offset diferente do que a gente grava, então comparar string
+    com string acusaria mudança em agendamento que não mudou."""
+    try:
+        return datetime.fromisoformat(anterior) == datetime.fromisoformat(novo)
+    except (ValueError, TypeError):
+        return False
+
+
+def _cancelar_lembretes_pendentes(sb, lead_id: str) -> int:
+    """Tira de 'pending' os lembretes de agendamento já criados pro lead, devolvendo
+    quantos foram cancelados. Usado no cancelamento e na remarcação: nos dois casos o
+    lembrete existente aponta pra uma data que não vale mais. executar_jobs_pendentes()
+    só busca status='pending', então 'cancelled' nunca dispara."""
+    import logging
+    try:
+        r = (
+            sb.table("followup_jobs")
+            .update({"status": "cancelled"})
+            .eq("lead_id", lead_id)
+            .eq("job_type", "appointment_reminder")
+            .eq("status", "pending")
+            .execute()
+        )
+        return len(r.data or [])
+    except Exception as e:
+        logging.getLogger(__name__).error("Falha ao cancelar lembretes do lead %s: %s", lead_id, e)
+        return 0
+
+
+async def _cancel_appointment(inp: dict, tenant: dict, phone: str) -> dict:
+    """Cancela o próximo agendamento ativo do lead. O cancelamento é lógico
+    (preenche cancelled_at) e não DELETE: é esse histórico que vira taxa de
+    cancelamento por clínica no resumo pro dono."""
+    sb = mem.get_client()
+    agora = datetime.now(timezone.utc)
+
+    proximos = (
+        sb.table("appointments")
+        .select("id, service, scheduled_at")
+        .eq("lead_id", inp["lead_id"])
+        .eq("tenant_id", str(tenant["id"]))
+        .is_("cancelled_at", "null")
+        .gte("scheduled_at", agora.isoformat())
+        .order("scheduled_at", desc=False)
+        .limit(1)
+        .execute()
+    ).data
+
+    if not proximos:
+        return {
+            "success": False,
+            "error":   "sem_agendamento",
+            "message": "Não encontrei nenhum agendamento futuro em aberto para esse lead.",
+        }
+
+    agendamento = proximos[0]
+    sb.table("appointments").update(
+        {"cancelled_at": agora.isoformat()}
+    ).eq("id", agendamento["id"]).execute()
+
+    # Sem isso o lead que acabou de cancelar ainda receberia "seu agendamento é amanhã".
+    lembretes = _cancelar_lembretes_pendentes(sb, inp["lead_id"])
+
+    quando = _formatar_quando(agendamento.get("scheduled_at"))
+    return {
+        "success":               True,
+        "appointment_id":        agendamento["id"],
+        "servico":               agendamento.get("service", ""),
+        "quando":                quando,
+        "lembretes_cancelados":  lembretes,
+        "motivo":                inp.get("motivo", ""),
+    }
+
+
+def _formatar_quando(scheduled_at: str | None) -> str:
+    """Data do agendamento em horário de Fortaleza, pro modelo confirmar ao lead
+    exatamente o que foi cancelado."""
+    try:
+        return datetime.fromisoformat(scheduled_at).astimezone(FORTALEZA_TZ).strftime("%d/%m/%Y às %H:%M")
+    except (ValueError, TypeError):
+        return ""
 
 
 def _agendar_recall_se_configurado(sb, inp: dict, tenant: dict, phone: str, scheduled_at_localizado: str) -> dict | None:

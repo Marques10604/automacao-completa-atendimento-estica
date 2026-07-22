@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     meta_ig_page_id: str = ""
     asaas_api_key: str = ""
     asaas_base_url: str = "https://api.asaas.com/v3"
+    # Transcrição de nota de voz (Groq / Whisper). Opcional de propósito: sem a chave
+    # o agente volta a só avisar que não processa áudio, sem quebrar nada.
+    groq_api_key: str = ""
     admin_api_key: str = ""
     whatsapp_app_secret: str = ""
     port: int = 8000
