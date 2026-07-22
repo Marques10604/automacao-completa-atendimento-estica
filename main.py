@@ -38,13 +38,42 @@ from app.services.report_service import detectar_comando_relatorio, montar_relat
 from app.webhooks.media_fallback import resposta_midia_nao_suportada
 from app.config import settings
 
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
-WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
-ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
+# Fonte única: settings (pydantic-settings). Os os.getenv extras são compatibilidade
+# com os nomes que já circularam no .env deste projeto — VERIFY_TOKEN e
+# META_VERIFY_TOKEN conviviam, e ler só um deixava o token vazio: a verificação do
+# webhook comparava contra string vazia e a Meta levava 403 em toda tentativa de
+# registrar a URL de callback, sem nenhuma pista do motivo.
+VERIFY_TOKEN = settings.meta_verify_token or os.getenv("VERIFY_TOKEN", "")
+WHATSAPP_APP_SECRET = settings.whatsapp_app_secret or os.getenv("WHATSAPP_APP_SECRET", "")
+ADMIN_API_KEY = settings.admin_api_key or os.getenv("ADMIN_API_KEY", "")
+
+
+def _diagnostico_whatsapp() -> None:
+    """Diz na subida o que falta pro WhatsApp funcionar.
+
+    Sem isso, uma variável ausente aparece só como 403 da Meta na hora de registrar o
+    webhook, ou como resposta que nunca chega ao lead — sintomas que não apontam pra
+    causa e custam horas de tentativa e erro.
+    """
+    faltando = []
+    if not VERIFY_TOKEN:
+        faltando.append("META_VERIFY_TOKEN (a Meta não consegue validar a URL do webhook)")
+    if not settings.meta_wa_token:
+        faltando.append("META_WA_TOKEN (nenhuma resposta é enviada, a menos que o tenant tenha token próprio)")
+    if not settings.meta_wa_phone_number_id:
+        faltando.append("META_WA_PHONE_NUMBER_ID (só funciona se cada tenant tiver o seu no banco)")
+    if not WHATSAPP_APP_SECRET:
+        faltando.append("WHATSAPP_APP_SECRET (assinatura do webhook não é conferida — tolerável em teste, risco em produção)")
+
+    if faltando:
+        logger.warning("Configuração de WhatsApp incompleta — faltando: %s", " | ".join(faltando))
+    else:
+        logger.info("WhatsApp configurado (verify_token, token e phone_number_id presentes)")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _diagnostico_whatsapp()
     scheduler = get_scheduler()
     scheduler.start()
     logger.info("APScheduler iniciado — follow-up runner ativo")
