@@ -217,6 +217,14 @@ Se o lead digitar "SAIR" (case-insensitive): use `update_lead_status` com "frio"
 
 ## HORÁRIOS
 {horarios}
+
+## INFORMAÇÕES DA CLÍNICA
+Use esta seção para responder perguntas práticas do lead (endereço, estacionamento,
+formas de pagamento, política de atraso, o que levar, etc.).
+Se a resposta NÃO estiver aqui, nunca invente: diga que vai confirmar com a equipe e
+use `escalate_to_human`. Informação errada sobre a clínica destrói a confiança do lead
+e cria problema real pra {clinic_name}.
+{faq}
 """
 
 SYSTEM_PROMPT_IG = SYSTEM_PROMPT_WA + """
@@ -237,16 +245,35 @@ SERVICOS_PADRAO = """- Limpeza de pele profunda (R$ 180)
 HORARIOS_PADRAO = "Segunda a sexta: 9h às 19h | Sábado: 9h às 14h"
 
 
-def build_prompt(tenant: dict, canal: str = "whatsapp") -> str:
+FAQ_VAZIO = "(Nenhuma informação cadastrada ainda — para qualquer pergunta prática sobre a clínica, diga que vai confirmar com a equipe.)"
+
+
+def build_prompt(
+    tenant: dict,
+    canal: str = "whatsapp",
+    servicos_texto: str | None = None,
+    faq_texto: str | None = None,
+) -> str:
+    """Monta o system prompt do tenant.
+
+    `servicos_texto` e `faq_texto` vêm do catálogo (tabelas services/faq, via
+    catalog_service). Quando não vêm — tenant ainda não migrado, ou falha de leitura —
+    cai no JSONB antigo de tenants.servicos e, por último, na lista padrão. O
+    atendimento nunca fica sem catálogo nenhum.
+    """
     template = SYSTEM_PROMPT_IG if canal == "instagram" else SYSTEM_PROMPT_WA
-    servicos = tenant.get("servicos") or SERVICOS_PADRAO
-    horarios = tenant.get("horarios") or HORARIOS_PADRAO
+
+    servicos = servicos_texto or tenant.get("servicos") or SERVICOS_PADRAO
     if isinstance(servicos, (dict, list)):
         servicos = json.dumps(servicos, ensure_ascii=False)
+
+    horarios = tenant.get("horarios") or HORARIOS_PADRAO
+
     return template.format(
         professional_name=tenant.get("professional_name") or "Assistente Virtual",
         clinic_name=tenant.get("clinic_name") or "Clínica",
         servicos=servicos,
         horarios=horarios,
+        faq=faq_texto or FAQ_VAZIO,
         hoje=_hoje_formatado(),
     )

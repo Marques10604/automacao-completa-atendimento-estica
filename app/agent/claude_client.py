@@ -14,12 +14,26 @@ MAX_TOKENS = 1024
 _PROMPT_FALLBACK = "Você é uma assistente de vendas de alta performance. Ajude o lead a agendar e fechar negócio."
 
 
-def _get_system_prompt(tenant: dict, canal: str) -> str:
+async def _get_system_prompt(tenant: dict, canal: str) -> str:
+    """Monta o system prompt já com o catálogo de serviços e o FAQ do tenant.
+
+    A leitura do catálogo roda em to_thread porque o client do Supabase é síncrono.
+    São duas consultas indexadas por turno; se um dia pesar na latência, o caminho é
+    cache por tenant com TTL curto — não vale complicar antes de medir.
+    """
     try:
         from app.agent.prompts import build_prompt
-        return build_prompt(tenant, canal)
+        from app.services.catalog_service import carregar_catalogo
     except ImportError:
         return _PROMPT_FALLBACK
+
+    catalogo = await asyncio.to_thread(carregar_catalogo, str(tenant["id"]))
+    return build_prompt(
+        tenant,
+        canal,
+        servicos_texto=catalogo.get("servicos") or None,
+        faq_texto=catalogo.get("faq") or None,
+    )
 
 
 async def processar_mensagem(
@@ -133,7 +147,7 @@ async def processar_mensagem(
             "lead_id":   lead_id,
         }
 
-    system_prompt = _get_system_prompt(tenant, canal)
+    system_prompt = await _get_system_prompt(tenant, canal)
     mensagens_api = [{"role": m["role"], "content": m["content"]} for m in historico]
 
     for _ in range(5):
