@@ -12,7 +12,9 @@ A Meta lançou o **WhatsApp Business AI** nativo no Brasil em fev/2026 — de gr
 2. **Cancelamento/remarcação self-service** — ✅ implementado em 2026-07-22. **Requer rodar `database/migration_v8.sql` no Supabase ANTES de subir o código.**
 3. **Relatório pro dono via WhatsApp** — ✅ implementado em 2026-07-22. Virou **sob demanda** (dono pede) em vez de envio automático num horário fixo — ver justificativa abaixo.
 4. **Cross-sell pós-procedimento** — ✅ implementado em 2026-07-22. **Requer `database/migration_v9.sql`.**
-5. **Motor de referral com código rastreável** — hoje o job `pos_venda` só *pede* indicação em texto solto; falta gerar código + registrar + recompensar quando o indicado fecha.
+5. **Motor de referral com código rastreável** — hoje o job `pos_venda` só *pede* indicação em texto solto; falta gerar código + registrar + recompensar quando o indicado fecha. ⏸️ **Adiado** — ver decisão abaixo.
+
+> ⏸️ **Roadmap pausado a partir do item 5 (2026-07-22).** Decisão de priorizar o catálogo de serviços estruturado como fundação do painel de autoatendimento do cliente — sem ele, cada cliente novo exige configuração manual no Supabase pelo desenvolvedor, que vira o gargalo do crescimento. Ver `docs/superpowers/decisoes/2026-07-22-catalogo-de-servicos-e-painel.md`. Os itens 5-8 seguem válidos e voltam depois da fundação.
 6. **Integração com sistema de gestão da clínica** (Feegow via API aberta / Clinicorp, Shosp, iClinic via RPA quando não há API) — insight de upsell: a maioria dos sistemas de clínica no Brasil não tem API pública boa, o que torna essa integração um serviço vendável à parte (setup + manutenção recorrente), difícil de replicar por concorrentes genéricos.
 7. **Pedido de review/reputação pós-venda** (D+2 pós-procedimento) — nenhum job de follow-up hoje pede avaliação.
 8. **Sync com Google Calendar** — escolhido sobre Cal.com porque toda clínica já usa Google Calendar no dia a dia (zero fricção de adoção) e o produto é multi-tenant (OAuth por tenant, agenda já existente como espelho).
