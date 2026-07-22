@@ -8,3 +8,13 @@ venv/
 dist/
 build/
 uvicorn.log
+
+# Grafo de conhecimento — gerado por `graphify update .` a partir do próprio código
+# (AST, sem custo de API). Reconstruir é barato; versionar geraria conflito a cada
+# commit, já que o grafo muda em qualquer alteração de código.
+graphify-out/
+
+# Config local do Claude Code: permissões e locks são da máquina, não do projeto.
+# .claude/settings.json (config compartilhada do projeto) continua versionado.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

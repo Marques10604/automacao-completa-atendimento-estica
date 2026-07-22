@@ -10,6 +10,29 @@
 
 ---
 
+## Status real (reconciliado em 2026-07-21 via graphify query)
+
+Os checkboxes `- [ ]` abaixo nunca foram atualizados neste arquivo, mas o código já implementa todas as 10 tasks. Confirmado via grafo (`app/`, `main.py`, `database/migration_v*.sql`, `railway.toml`):
+
+| Task | Evidência de código | Status |
+|------|---------------------|--------|
+| 1 — Estrutura + config + migration | `app/config.py`, `database/migration_v2.sql` (evoluiu até `migration_v7.sql`) | ✅ Implementado |
+| 2 — Dispatcher WA/IG | `app/agent/dispatcher.py`: `send_whatsapp()`, `send_message()` | ✅ Implementado |
+| 3 — Tool use (6 tools) | `app/agent/tools.py`: `TOOL_DEFINITIONS`, `execute_tool()`, `_book_appointment()`, `_migrate_to_whatsapp()` + `app/agent/claude_client.py`: `processar_mensagem()` | ✅ Implementado (+ tool extra `escalate_to_human` não prevista no plano original) |
+| 4 — Prompts BANT/SPIN | `app/agent/prompts.py`: `build_prompt()`, `claude_client.py`: `_get_system_prompt()` | ✅ Implementado |
+| 5 — Webhook Instagram | `app/webhooks/instagram.py`: `instagram_verify()`, `instagram_webhook()` | ✅ Implementado |
+| 6 — APScheduler + follow-up | `app/services/followup_service.py`: `executar_jobs_pendentes()`, `app/jobs/scheduler.py`: `get_scheduler()` | ✅ Implementado |
+| 7 — POST /payment/confirm | `main.py`: `payment_confirm()` | ✅ Implementado |
+| 8 — LGPD consent_log + SAIR | `processar_mensagem()` referencia `consent_log`; `_update_lead_status()` disponível para status "frio" | ✅ Implementado |
+| 9 — GET /leads com filtros | `main.py`: `list_leads()` | ✅ Implementado |
+| 10 — railway.toml | `railway.toml` presente na raiz | ✅ Implementado (arquivo existe — deploy real no Railway e registro dos webhooks no Meta Business Manager não são verificáveis pelo código) |
+
+**Trabalho extra além do plano original** (commits recentes não cobertos pelas tasks acima): `app/services/failure_service.py` (observabilidade de falha estruturada + retry no envio), `app/webhooks/media_fallback.py` (não descarta mídia em silêncio), `main.py`: `escalar_lead()`/`desescalar_lead()`, dedup de `appointments` em `migration_v6.sql`.
+
+Os checkboxes originais abaixo foram deixados como estavam (histórico do plano); use a tabela acima como fonte de verdade sobre o que já existe no código.
+
+---
+
 ## Diagnóstico: O que existe vs. o que muda
 
 ### Já existe (não reescrever)
