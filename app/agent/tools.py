@@ -324,15 +324,27 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
 
     resultado = {"success": True, "appointment_id": appointment_id, "remarcado": remarcado}
 
-    # Remarcou: o lembrete que já existia foi calculado pra data ANTIGA e dispararia no
-    # dia errado ("seu agendamento é amanhã" sobre um horário que não existe mais).
-    # Cancela o antigo aqui; o novo é criado pelo schedule_followup logo em seguida.
+    # Recall e cross-sell são recriados por código logo abaixo, com data derivada do
+    # agendamento. Cancelar os antigos ANTES de recriar evita duplicata: sem isso, cada
+    # remarcação ou reconfirmação empilhava mais um job pendente, e o lead receberia a
+    # mesma oferta duas ou três vezes.
+    _cancelar_jobs_pendentes(sb, inp["lead_id"], ("recall_procedimento", "cross_sell"))
+
+    # O lembrete é criado pelo modelo (schedule_followup), não por código — por isso só
+    # é cancelado quando a data mudou de fato. Cancelar sempre deixaria o lead sem
+    # lembrete nenhum nas vezes em que o modelo não recriasse.
     if remarcado:
-        resultado["lembretes_antigos_cancelados"] = _cancelar_lembretes_pendentes(sb, inp["lead_id"])
+        resultado["lembretes_antigos_cancelados"] = _cancelar_jobs_pendentes(
+            sb, inp["lead_id"], ("appointment_reminder",)
+        )
 
     recall_info = _agendar_recall_se_configurado(sb, inp, tenant, phone, scheduled_at)
     if recall_info:
         resultado["recall_agendado"] = recall_info
+
+    cross_sell_info = _agendar_cross_sell_se_configurado(sb, inp, tenant, phone, scheduled_at)
+    if cross_sell_info:
+        resultado["cross_sell_agendado"] = cross_sell_info
 
     return resultado
 
@@ -347,25 +359,43 @@ def _mesmo_instante(anterior: str | None, novo: str) -> bool:
         return False
 
 
-def _cancelar_lembretes_pendentes(sb, lead_id: str) -> int:
-    """Tira de 'pending' os lembretes de agendamento já criados pro lead, devolvendo
-    quantos foram cancelados. Usado no cancelamento e na remarcação: nos dois casos o
-    lembrete existente aponta pra uma data que não vale mais. executar_jobs_pendentes()
-    só busca status='pending', então 'cancelled' nunca dispara."""
+# Follow-ups cuja data é derivada de um agendamento. Se o agendamento some ou muda de
+# data, todos eles passam a apontar pra uma realidade que não existe mais.
+JOBS_DERIVADOS_DO_AGENDAMENTO = ("appointment_reminder", "recall_procedimento", "cross_sell")
+
+
+def _cancelar_jobs_pendentes(sb, lead_id: str, tipos: tuple[str, ...]) -> int:
+    """Tira de 'pending' os follow-ups dos tipos indicados, devolvendo quantos foram
+    cancelados. executar_jobs_pendentes() só busca status='pending', então 'cancelled'
+    nunca dispara."""
     import logging
     try:
         r = (
             sb.table("followup_jobs")
             .update({"status": "cancelled"})
             .eq("lead_id", lead_id)
-            .eq("job_type", "appointment_reminder")
+            .in_("job_type", list(tipos))
             .eq("status", "pending")
             .execute()
         )
         return len(r.data or [])
     except Exception as e:
-        logging.getLogger(__name__).error("Falha ao cancelar lembretes do lead %s: %s", lead_id, e)
+        logging.getLogger(__name__).error("Falha ao cancelar jobs %s do lead %s: %s", tipos, lead_id, e)
         return 0
+
+
+def _casar_regra_procedimento(regras: dict, servico: str | None) -> tuple[str | None, object]:
+    """Acha a regra cujo nome bate com o serviço agendado — case-insensitive e por
+    substring nos dois sentidos, porque o nome que o modelo grava ("Botox preventivo")
+    raramente é idêntico ao que a clínica cadastrou ("botox")."""
+    alvo = (servico or "").strip().lower()
+    if not alvo:
+        return None, None
+    for nome, valor in (regras or {}).items():
+        nome_lower = str(nome).strip().lower()
+        if nome_lower in alvo or alvo in nome_lower:
+            return nome, valor
+    return None, None
 
 
 async def _cancel_appointment(inp: dict, tenant: dict, phone: str) -> dict:
@@ -399,8 +429,10 @@ async def _cancel_appointment(inp: dict, tenant: dict, phone: str) -> dict:
         {"cancelled_at": agora.isoformat()}
     ).eq("id", agendamento["id"]).execute()
 
-    # Sem isso o lead que acabou de cancelar ainda receberia "seu agendamento é amanhã".
-    lembretes = _cancelar_lembretes_pendentes(sb, inp["lead_id"])
+    # Cancela TODOS os follow-ups derivados desse agendamento. Sem isso o lead que
+    # acabou de desmarcar ainda receberia "seu agendamento é amanhã" — e, meses depois,
+    # o recall de um procedimento que nunca chegou a acontecer.
+    lembretes = _cancelar_jobs_pendentes(sb, inp["lead_id"], JOBS_DERIVADOS_DO_AGENDAMENTO)
 
     quando = _formatar_quando(agendamento.get("scheduled_at"))
     return {
@@ -431,25 +463,11 @@ def _agendar_recall_se_configurado(sb, inp: dict, tenant: dict, phone: str, sche
     import logging
     logger = logging.getLogger(__name__)
 
-    regras = tenant.get("procedimentos_recall") or {}
-    if not regras:
-        return None
-
-    servico = (inp.get("service") or "").strip().lower()
-    if not servico:
-        return None
-
-    dias_recall = None
-    procedimento_encontrado = None
-    for nome_regra, dias in regras.items():
-        nome_regra_lower = str(nome_regra).strip().lower()
-        if nome_regra_lower in servico or servico in nome_regra_lower:
-            dias_recall = dias
-            procedimento_encontrado = nome_regra
-            break
-
-    if dias_recall is None:
-        logger.info("Nenhuma regra de recall bate com o serviço '%s' — recall não agendado", servico)
+    procedimento_encontrado, dias_recall = _casar_regra_procedimento(
+        tenant.get("procedimentos_recall") or {}, inp.get("service")
+    )
+    if procedimento_encontrado is None or dias_recall is None:
+        logger.info("Nenhuma regra de recall bate com o serviço '%s' — recall não agendado", inp.get("service"))
         return None
 
     agendamento_em = datetime.fromisoformat(scheduled_at_localizado)
@@ -470,6 +488,54 @@ def _agendar_recall_se_configurado(sb, inp: dict, tenant: dict, phone: str, sche
         procedimento_encontrado, dias_recall, scheduled_at, row.data[0]["id"],
     )
     return {"job_id": row.data[0]["id"], "procedimento": procedimento_encontrado, "scheduled_at": scheduled_at}
+
+
+def _agendar_cross_sell_se_configurado(sb, inp: dict, tenant: dict, phone: str, scheduled_at_localizado: str) -> dict | None:
+    """
+    Se o tenant configurou cross_sell (JSONB: {"procedimento feito": {"oferecer": "outro
+    procedimento", "dias": N}}), cria o followup_job que apresenta o procedimento
+    complementar N dias depois do agendamento.
+
+    Diferente do recall, que oferece o MESMO procedimento de novo pra manter o resultado:
+    aqui a ideia é apresentar um procedimento diferente que combina com o que a pessoa
+    acabou de fazer. Por isso os prazos são bem distintos — recall costuma ser meses,
+    cross-sell costuma ser semanas.
+
+    Assim como o recall, roda por código e não depende do modelo lembrar de chamar.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    nome_regra, regra = _casar_regra_procedimento(tenant.get("cross_sell") or {}, inp.get("service"))
+    if nome_regra is None:
+        return None
+    if not isinstance(regra, dict):
+        logger.warning("Regra de cross_sell de '%s' deveria ser objeto {oferecer, dias} — ignorada", nome_regra)
+        return None
+
+    oferecer = str(regra.get("oferecer") or "").strip()
+    dias = regra.get("dias")
+    if not oferecer or dias is None:
+        logger.warning("Regra de cross_sell de '%s' sem 'oferecer' ou 'dias' — ignorada", nome_regra)
+        return None
+
+    quando = (datetime.fromisoformat(scheduled_at_localizado) + timedelta(days=int(dias))).isoformat()
+
+    row = sb.table("followup_jobs").insert({
+        "lead_id":      inp["lead_id"],
+        "tenant_id":    str(tenant["id"]),
+        "channel":      "whatsapp",
+        "phone":        phone,
+        "job_type":     "cross_sell",
+        "scheduled_at": quando,
+        "payload":      {"feito": nome_regra, "oferecer": oferecer, "dias": dias},
+    }).execute()
+
+    logger.info(
+        "Cross-sell agendado: feito='%s' oferecer='%s' dias=%s scheduled_at=%s job_id=%s",
+        nome_regra, oferecer, dias, quando, row.data[0]["id"],
+    )
+    return {"job_id": row.data[0]["id"], "oferecer": oferecer, "scheduled_at": quando}
 
 
 async def _generate_payment_link(inp: dict, tenant: dict, phone: str) -> dict:

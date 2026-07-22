@@ -12,6 +12,10 @@ TEMPLATES = {
     "payment_recovery":     "Olá! Vi que você não finalizou o pagamento. O link ainda está válido — posso te ajudar com alguma dúvida? ✨",
     "pos_venda":            "Olá! Esperamos que tenha adorado o resultado! 😊 Tem alguém que você indicaria para conhecer nossos serviços?",
     "recall_procedimento":  "Olá! 💫 Já faz um tempinho desde o seu {procedimento} — geralmente é nessa época que dá aquela renovada pra manter o resultado. Quer que eu já veja um horário pra você?",
+    # Cross-sell não cita preço de propósito: a mensagem só desperta interesse, e o
+    # valor entra depois na conversa, quando o lead perguntar — mesma regra do prompt
+    # ("PREÇO SÓ QUANDO PERGUNTADO"). Com preço, o follow-up viraria anúncio.
+    "cross_sell":           "Oi! Como você ficou do {feito}? 💛 Muita gente que faz {feito} acaba curtindo o {oferecer} pra completar o resultado. Quer que eu te conte como funciona?",
 }
 
 
@@ -25,6 +29,8 @@ def _montar_texto(job: dict) -> str:
         # Se faltar alguma variável no payload, cai pra uma versão genérica em vez de quebrar o envio
         if job_type == "recall_procedimento":
             return "Olá! 💫 Já faz um tempinho desde seu último procedimento — geralmente é nessa época que dá aquela renovada. Quer que eu já veja um horário pra você?"
+        if job_type == "cross_sell":
+            return "Oi! Como você ficou do seu último procedimento? 💛 Temos outros que combinam bem com ele — quer que eu te conte?"
         return template
 
 

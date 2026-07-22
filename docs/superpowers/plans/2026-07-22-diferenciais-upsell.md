@@ -11,7 +11,7 @@ A Meta lançou o **WhatsApp Business AI** nativo no Brasil em fev/2026 — de gr
 1. **Transcrição de áudio (Groq Whisper)** — ✅ implementado em 2026-07-22 (ver detalhe abaixo). Falta só a `GROQ_API_KEY` em produção pra ativar.
 2. **Cancelamento/remarcação self-service** — ✅ implementado em 2026-07-22. **Requer rodar `database/migration_v8.sql` no Supabase ANTES de subir o código.**
 3. **Relatório pro dono via WhatsApp** — ✅ implementado em 2026-07-22. Virou **sob demanda** (dono pede) em vez de envio automático num horário fixo — ver justificativa abaixo.
-4. **Tool de upsell/cross-sell pós-fechamento** — sugestão de procedimento complementar baseada no serviço comprado (ex.: Botox → oferta de preenchimento em 30 dias).
+4. **Cross-sell pós-procedimento** — ✅ implementado em 2026-07-22. **Requer `database/migration_v9.sql`.**
 5. **Motor de referral com código rastreável** — hoje o job `pos_venda` só *pede* indicação em texto solto; falta gerar código + registrar + recompensar quando o indicado fecha.
 6. **Integração com sistema de gestão da clínica** (Feegow via API aberta / Clinicorp, Shosp, iClinic via RPA quando não há API) — insight de upsell: a maioria dos sistemas de clínica no Brasil não tem API pública boa, o que torna essa integração um serviço vendável à parte (setup + manutenção recorrente), difícil de replicar por concorrentes genéricos.
 7. **Pedido de review/reputação pós-venda** (D+2 pós-procedimento) — nenhum job de follow-up hoje pede avaliação.
@@ -85,6 +85,37 @@ Decisões de implementação:
 - **Dia sem movimento responde mesmo assim** ("nenhum movimento hoje"). No modelo push a decisão era não enviar; no pull o dono perguntou, e silêncio pareceria defeito.
 
 Métricas: leads novos, agendamentos (com % de conversão), cancelamentos, leads aguardando atendimento humano, e agendamentos confirmados nos próximos 7 dias.
+
+---
+
+## Item 4: Cross-sell pós-procedimento — IMPLEMENTADO (2026-07-22)
+
+> ⚠️ Requer `database/migration_v9.sql` antes do deploy (coluna `tenants.cross_sell` + ampliar o CHECK de `followup_jobs.job_type`).
+
+**Descoberta antes de codar:** o `recall_procedimento` já existia e cobria metade disso. Recall = repetir o MESMO procedimento pra manter resultado (meses). Cross-sell = oferecer um procedimento DIFERENTE que combina (semanas). Motivações e prazos distintos, por isso config separada.
+
+Configuração (`tenants.cross_sell`, JSONB):
+```json
+{"botox": {"oferecer": "preenchimento labial", "dias": 30}}
+```
+Coluna separada de `procedimentos_recall` de propósito: o mesmo botox pode gerar recall em 180 dias E cross-sell em 30. Num mapa só, uma regra sobrescreveria a outra.
+
+**Sem preço na mensagem** (decisão do dono do produto): a oferta desperta interesse e o valor entra depois, quando o lead perguntar — mesma regra do prompt ("PREÇO SÓ QUANDO PERGUNTADO"). Com preço, o follow-up viraria anúncio.
+
+### Dois bugs existentes corrigidos junto
+
+1. **Cancelar não matava o recall.** O lead desmarcava o botox e, 6 meses depois, recebia "faz um tempinho desde o seu botox" — sobre um botox que nunca aconteceu. `_cancel_appointment` agora cancela os três tipos derivados do agendamento (`JOBS_DERIVADOS_DO_AGENDAMENTO`).
+2. **Remarcar duplicava o recall.** `_agendar_recall_se_configurado` fazia INSERT incondicional a cada `book_appointment`; remarcar ou reconfirmar empilhava jobs pendentes e o lead receberia a mesma mensagem 2-3 vezes. Agora recall e cross-sell são cancelados antes de recriar.
+
+Assimetria deliberada em `_book_appointment`: recall e cross-sell são **sempre** cancelados antes de recriar (código garante a recriação), mas o `appointment_reminder` só é cancelado quando a data muda de fato — quem o cria é o modelo via `schedule_followup`, e cancelar sempre deixaria o lead sem lembrete nas vezes em que o modelo esquecesse de recriar.
+
+### Validado ponta a ponta (tenant `bia`, banco real)
+
+| Cenário | Resultado |
+|---|---|
+| Agendar limpeza 27/07 | `cross_sell` criado pra 17/08 (+21 dias), payload correto |
+| Remarcar pra 28/07 | 1 linha de appointment; cross-sell antigo `cancelled`, novo pra 18/08 — **1 pendente, não 2** |
+| Cancelar | appointment com `cancelled_at`; **0 jobs pendentes** |
 
 Observação sobre o schema: `leads` tem duas colunas de funil — `stage` (usada de verdade, escrita por `_update_lead_status`) e `status` (criada na migration_v2 e aparentemente morta, nada escreve nela). O relatório não depende de nenhuma das duas hoje, mas vale limpar isso antes de construir métrica por estágio.
 
