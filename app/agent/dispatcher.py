@@ -5,6 +5,27 @@ import httpx
 from app.config import settings
 
 
+def normalizar_telefone_br(phone: str) -> str:
+    """Insere o 9º dígito em celular brasileiro quando a Meta entrega sem ele.
+
+    A Meta reporta o remetente de números do Brasil no formato antigo, sem o 9
+    inicial do celular (ex.: 55 85 97542412 = 12 dígitos). Mas pra ENVIAR, o número
+    precisa estar no formato atual, com o 9 (55 85 9 97542412 = 13 dígitos) — que é
+    como o dono cadastra na lista de permissão. Sem essa correção, toda resposta a
+    lead brasileiro falha com erro 131030 ("recipient not in allowed list").
+
+    Regra: 55 + DDD(2) + 8 dígitos → insere '9' logo após o DDD. Números que já têm
+    13 dígitos, ou que não são brasileiros, passam intactos.
+    """
+    if not phone:
+        return phone
+    digitos = "".join(c for c in phone if c.isdigit())
+    # 55 (país) + 2 (DDD) + 8 (número antigo, sem o 9) = 12 dígitos
+    if len(digitos) == 12 and digitos.startswith("55"):
+        return digitos[:4] + "9" + digitos[4:]
+    return digitos
+
+
 async def _delay_digitacao(texto: str) -> None:
     """Pausa proporcional ao tamanho do texto, imitando ritmo real de digitação
     (~70ms/caractere, entre 1.6s e 6s, com variação aleatória)."""
@@ -17,6 +38,7 @@ async def send_whatsapp(phone: str, text: str, wa_token: str, phone_number_id: s
     separado por linha em branco), com pausa de digitação entre elas. Uma pessoa real
     não manda um bloco gigante de texto de uma vez só; manda várias mensagens curtas."""
     partes = [p.strip() for p in text.split("\n\n") if p.strip()] or [text]
+    destino = normalizar_telefone_br(phone)  # corrige o 9º dígito antes de enviar
     url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {wa_token}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=10) as client:
@@ -24,7 +46,7 @@ async def send_whatsapp(phone: str, text: str, wa_token: str, phone_number_id: s
             await _delay_digitacao(parte)
             payload = {
                 "messaging_product": "whatsapp",
-                "to": phone,
+                "to": destino,
                 "type": "text",
                 "text": {"body": parte},
             }
