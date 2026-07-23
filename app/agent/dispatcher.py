@@ -54,8 +54,14 @@ async def send_whatsapp(phone: str, text: str, wa_token: str, phone_number_id: s
     celular BR que a Meta entrega sem o 9 mas só aceita com, e vice-versa. A escolha que
     der certo passa a valer pras próximas bolhas da mesma mensagem."""
     partes = [p.strip() for p in text.split("\n\n") if p.strip()] or [text]
-    destino = _so_digitos(phone)
-    alternativo = alternar_nono_digito_br(phone)
+    # A Meta orienta enviar celular BR sempre com o 9º dígito (13 dígitos), em dev e
+    # produção. Então tentamos primeiro o formato com o 9 e deixamos o outro (sem o 9)
+    # como fallback caso a Meta recuse com 131030 — cobre também números legados cujo
+    # wa_id ainda é o de 8 dígitos.
+    puro = _so_digitos(phone)
+    com_nono = alternar_nono_digito_br(phone) if len(puro) == 12 else None
+    destino = com_nono or puro
+    alternativo = puro if com_nono else alternar_nono_digito_br(phone)
     url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {wa_token}", "Content-Type": "application/json"}
 
