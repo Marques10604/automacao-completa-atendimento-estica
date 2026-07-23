@@ -5,25 +5,31 @@ import httpx
 from app.config import settings
 
 
-def normalizar_telefone_br(phone: str) -> str:
-    """Insere o 9º dígito em celular brasileiro quando a Meta entrega sem ele.
+def _so_digitos(phone: str) -> str:
+    return "".join(c for c in (phone or "") if c.isdigit())
 
-    A Meta reporta o remetente de números do Brasil no formato antigo, sem o 9
-    inicial do celular (ex.: 55 85 97542412 = 12 dígitos). Mas pra ENVIAR, o número
-    precisa estar no formato atual, com o 9 (55 85 9 97542412 = 13 dígitos) — que é
-    como o dono cadastra na lista de permissão. Sem essa correção, toda resposta a
-    lead brasileiro falha com erro 131030 ("recipient not in allowed list").
 
-    Regra: 55 + DDD(2) + 8 dígitos → insere '9' logo após o DDD. Números que já têm
-    13 dígitos, ou que não são brasileiros, passam intactos.
+def alternar_nono_digito_br(phone: str) -> str | None:
+    """Devolve a MESMA linha brasileira no formato alternativo do 9º dígito, ou None
+    se não se aplica.
+
+    O WhatsApp trata o 9º dígito do celular brasileiro de forma inconsistente: em
+    DDDs de SP/RJ/ES o ID vem com o 9 (13 dígitos); em outros DDDs (ex.: 85 Fortaleza)
+    vem sem (12 dígitos). Não dá pra saber qual formato a Meta aceita sem tentar —
+    então quem envia tenta o número como veio e, se a Meta recusar (erro 131030),
+    reenvia com o 9 alternado por esta função.
+
+    - 55 + DDD + 8 dígitos (12) → insere o 9 → 13 dígitos
+    - 55 + DDD + 9XXXXXXXX (13) → remove o 9 → 12 dígitos
     """
-    if not phone:
-        return phone
-    digitos = "".join(c for c in phone if c.isdigit())
-    # 55 (país) + 2 (DDD) + 8 (número antigo, sem o 9) = 12 dígitos
-    if len(digitos) == 12 and digitos.startswith("55"):
-        return digitos[:4] + "9" + digitos[4:]
-    return digitos
+    d = _so_digitos(phone)
+    if not d.startswith("55"):
+        return None
+    if len(d) == 12:                      # sem o 9 → adiciona
+        return d[:4] + "9" + d[4:]
+    if len(d) == 13 and d[4] == "9":      # com o 9 → remove
+        return d[:4] + d[5:]
+    return None
 
 
 async def _delay_digitacao(texto: str) -> None:
@@ -33,24 +39,35 @@ async def _delay_digitacao(texto: str) -> None:
     await asyncio.sleep(base * (0.85 + random.random() * 0.3))
 
 
+async def _post_texto_wa(client: httpx.AsyncClient, url: str, headers: dict, destino: str, corpo: str) -> httpx.Response:
+    payload = {"messaging_product": "whatsapp", "to": destino, "type": "text", "text": {"body": corpo}}
+    return await client.post(url, json=payload, headers=headers)
+
+
 async def send_whatsapp(phone: str, text: str, wa_token: str, phone_number_id: str) -> None:
     """Envia mensagem via Meta Cloud API — quebrada em várias bolhas (por parágrafo,
     separado por linha em branco), com pausa de digitação entre elas. Uma pessoa real
-    não manda um bloco gigante de texto de uma vez só; manda várias mensagens curtas."""
+    não manda um bloco gigante de texto de uma vez só; manda várias mensagens curtas.
+
+    Se a Meta recusar o destinatário com 131030 (número não está no formato/lista que
+    ela aceita), tenta uma vez com o 9º dígito brasileiro alternado — resolve o caso do
+    celular BR que a Meta entrega sem o 9 mas só aceita com, e vice-versa. A escolha que
+    der certo passa a valer pras próximas bolhas da mesma mensagem."""
     partes = [p.strip() for p in text.split("\n\n") if p.strip()] or [text]
-    destino = normalizar_telefone_br(phone)  # corrige o 9º dígito antes de enviar
+    destino = _so_digitos(phone)
+    alternativo = alternar_nono_digito_br(phone)
     url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {wa_token}", "Content-Type": "application/json"}
+
     async with httpx.AsyncClient(timeout=10) as client:
         for i, parte in enumerate(partes):
             await _delay_digitacao(parte)
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": destino,
-                "type": "text",
-                "text": {"body": parte},
-            }
-            r = await client.post(url, json=payload, headers=headers)
+            r = await _post_texto_wa(client, url, headers, destino, parte)
+            if r.status_code == 400 and alternativo and '131030' in r.text:
+                # Formato do 9º dígito recusado — troca pro alternativo e fixa a escolha.
+                destino = alternativo
+                alternativo = None
+                r = await _post_texto_wa(client, url, headers, destino, parte)
             r.raise_for_status()
             if i < len(partes) - 1:
                 await asyncio.sleep(0.6 + random.random() * 0.4)
