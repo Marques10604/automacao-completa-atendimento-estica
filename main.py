@@ -355,6 +355,23 @@ async def webhook_whatsapp(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON inválido")
 
+    # Status de entrega (sent/delivered/read/failed) chega pelo MESMO campo "messages".
+    # Registra em agent_failures pra diagnosticar entrega — sobretudo o motivo quando a
+    # Meta aceita o envio (HTTP 200) mas não entrega. TODO temporário de diagnóstico.
+    _status = _extrair_status_whatsapp(body)
+    if _status:
+        import json as _json
+        detalhe = _json.dumps(_status, ensure_ascii=False)[:2000]
+        logger.warning("STATUS DE ENTREGA: %s", detalhe)
+        try:
+            await asyncio.to_thread(
+                registrar_falha, "diagnostico", None, _status.get("recipient_id", ""),
+                "whatsapp", "delivery_status", detalhe,
+            )
+        except Exception as e:
+            logger.error("Falha ao registrar delivery_status: %s", e)
+        return JSONResponse(content={"status": "status_registrado", "delivery": _status.get("status")})
+
     phone, mensagem, phone_number_id, wamid, tipo, media_id = _extrair_mensagem_whatsapp(body)
 
     if not phone:
@@ -433,6 +450,31 @@ async def webhook_whatsapp(request: Request):
     _debounce_tasks[key] = asyncio.create_task(_aguardar_e_processar(tenant, phone, mensagem, key))
 
     return JSONResponse(content={"status": "recebido", "phone": phone})
+
+
+def _extrair_status_whatsapp(body: dict) -> dict | None:
+    """Extrai o evento de status de entrega do payload, se for um. Devolve um resumo
+    com status (sent/delivered/read/failed), destinatário e — quando failed — o código
+    e o motivo do erro, que é o que explica 'aceita mas não entrega'."""
+    try:
+        value = body["entry"][0]["changes"][0]["value"]
+        statuses = value.get("statuses", [])
+        if not statuses:
+            return None
+        s = statuses[0]
+        resumo = {
+            "status": s.get("status"),
+            "recipient_id": s.get("recipient_id"),
+            "timestamp": s.get("timestamp"),
+        }
+        erros = s.get("errors") or []
+        if erros:
+            resumo["error_code"] = erros[0].get("code")
+            resumo["error_title"] = erros[0].get("title")
+            resumo["error_details"] = (erros[0].get("error_data") or {}).get("details")
+        return resumo
+    except (KeyError, IndexError, TypeError):
+        return None
 
 
 def _extrair_mensagem_whatsapp(body: dict) -> tuple[str, str, str, str, str, str]:
