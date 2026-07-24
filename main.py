@@ -535,8 +535,18 @@ async def onboarding_intake(request: Request, x_onboarding_key: str | None = Hea
       ],
       "faq": [
         {"pergunta": "Tem estacionamento?", "resposta": "Sim, gratuito."}
+      ],
+      "recall": [                                  // opcional — oferece o MESMO serviço de novo após X dias
+        {"servico": "Botox", "dias": 180}
+      ],
+      "cross_sell": [                               // opcional — oferece um serviço DIFERENTE após X dias
+        {"servico_feito": "Botox", "oferecer": "Preenchimento labial", "dias": 30}
       ]
     }
+
+    "servico"/"servico_feito" em recall/cross_sell precisam bater (substring, case-
+    insensitive) com algum nome em "servicos" — senão a regra nunca dispara. O endpoint
+    não bloqueia por isso, mas devolve um aviso em "avisos" na resposta.
     """
     if not settings.onboarding_secret or x_onboarding_key != settings.onboarding_secret:
         raise HTTPException(status_code=401, detail="Chave de onboarding inválida ou ausente")

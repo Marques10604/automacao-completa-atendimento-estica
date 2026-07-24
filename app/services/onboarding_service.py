@@ -57,7 +57,45 @@ def _validar_payload(payload: dict) -> list[str]:
         if not (f.get("pergunta") or "").strip() or not (f.get("resposta") or "").strip():
             erros.append(f"faq[{i}] precisa de pergunta e resposta")
 
+    for i, r in enumerate(payload.get("recall") or []):
+        if not (r.get("servico") or "").strip():
+            erros.append(f"recall[{i}].servico é obrigatório")
+        if r.get("dias") is None or int(r.get("dias") or 0) <= 0:
+            erros.append(f"recall[{i}].dias precisa ser positivo")
+
+    for i, c in enumerate(payload.get("cross_sell") or []):
+        if not (c.get("servico_feito") or "").strip():
+            erros.append(f"cross_sell[{i}].servico_feito é obrigatório")
+        if not (c.get("oferecer") or "").strip():
+            erros.append(f"cross_sell[{i}].oferecer é obrigatório")
+        if c.get("dias") is None or int(c.get("dias") or 0) <= 0:
+            erros.append(f"cross_sell[{i}].dias precisa ser positivo")
+
     return erros
+
+
+def _avisos_recall_cross_sell(payload: dict) -> list[str]:
+    """Não bloqueia o envio, só avisa: recall/cross-sell casam por nome do serviço
+    (substring, ver _casar_regra_procedimento em tools.py) — se o nome digitado aqui
+    não bater com nenhum serviço da lista, a regra nunca vai disparar, em silêncio.
+    Pega isso na hora do cadastro em vez de deixar a clínica descobrir 6 meses depois
+    que o recall nunca funcionou."""
+    nomes = [(s.get("nome") or "").strip().lower() for s in (payload.get("servicos") or [])]
+
+    def _bate(alvo: str) -> bool:
+        alvo = alvo.strip().lower()
+        return any(alvo and nome and (nome in alvo or alvo in nome) for nome in nomes)
+
+    avisos = []
+    for r in payload.get("recall") or []:
+        servico = r.get("servico") or ""
+        if servico and not _bate(servico):
+            avisos.append(f"recall: '{servico}' não bate com nenhum serviço cadastrado — a regra não vai disparar")
+    for c in payload.get("cross_sell") or []:
+        servico = c.get("servico_feito") or ""
+        if servico and not _bate(servico):
+            avisos.append(f"cross_sell: '{servico}' não bate com nenhum serviço cadastrado — a regra não vai disparar")
+    return avisos
 
 
 def processar_intake(payload: dict) -> dict:
@@ -91,6 +129,20 @@ def processar_intake(payload: dict) -> dict:
     }
     if payload.get("horarios"):
         campos_tenant["horarios"] = payload["horarios"]
+
+    # Mesmo tratamento "substitui por completo" dos serviços/FAQ: o formulário é o
+    # estado atual da clínica. Grava {} (não None) quando vazio, pra reenvio sem
+    # recall/cross-sell realmente limpar regras antigas, em vez de preservar lixo.
+    campos_tenant["procedimentos_recall"] = {
+        r["servico"].strip(): int(r["dias"])
+        for r in (payload.get("recall") or [])
+        if (r.get("servico") or "").strip() and r.get("dias") is not None
+    }
+    campos_tenant["cross_sell"] = {
+        c["servico_feito"].strip(): {"oferecer": c["oferecer"].strip(), "dias": int(c["dias"])}
+        for c in (payload.get("cross_sell") or [])
+        if (c.get("servico_feito") or "").strip() and (c.get("oferecer") or "").strip() and c.get("dias") is not None
+    }
 
     if tenant_id:
         sb.table("tenants").update(campos_tenant).eq("id", tenant_id).execute()
@@ -129,13 +181,19 @@ def processar_intake(payload: dict) -> dict:
     if faq_para_gravar:
         sb.table("faq").insert(faq_para_gravar).execute()
 
-    return {
+    resultado = {
         "success": True,
         "tenant_id": tenant_id,
         "tenant_slug": slug,
         "servicos_gravados": len(servicos_para_gravar),
         "faq_gravado": len(faq_para_gravar),
+        "recall_gravado": len(campos_tenant["procedimentos_recall"]),
+        "cross_sell_gravado": len(campos_tenant["cross_sell"]),
         # phone_number_id fica de fora de propósito — é passo manual, feito depois
         # de registrar o número na Meta.
         "proximo_passo": "Registrar o número de WhatsApp da clínica e vincular phone_number_id a este tenant.",
     }
+    avisos = _avisos_recall_cross_sell(payload)
+    if avisos:
+        resultado["avisos"] = avisos
+    return resultado

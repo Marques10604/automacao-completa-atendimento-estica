@@ -7,10 +7,11 @@ TOOL_DEFINITIONS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "date": {"type": "string", "description": "Data no formato DD/MM/YYYY"},
-                "time": {"type": "string", "description": "Horário no formato HH:MM ou HHh"},
+                "date":    {"type": "string", "description": "Data no formato DD/MM/YYYY"},
+                "time":    {"type": "string", "description": "Horário no formato HH:MM ou HHh"},
+                "service": {"type": "string", "description": "Nome do serviço/procedimento que o lead quer — define a duração real do slot na agenda, não é só informativo."},
             },
-            "required": ["date"],
+            "required": ["date", "service"],
         },
     },
     {
@@ -133,8 +134,35 @@ DEFAULT_HORARIOS = {
     "dom": None,
 }
 
-SLOT_DURATION_MINUTES = 60  # appointments não tem coluna de duração — cada agendamento
-# ocupa um slot inteiro desse tamanho pra fins de checagem de colisão.
+SLOT_DURATION_MINUTES = 60  # fallback quando o serviço não bate com nada cadastrado em
+# services, ou quando o tenant não tem services configurado ainda — mesmo comportamento
+# de antes da duração por serviço existir.
+
+
+def _buscar_duracao_servico(sb, tenant_id: str, service_nome: str | None) -> int:
+    """Duração em minutos do serviço, lida de `services` (cadastrada pela clínica).
+    Casamento por substring, case-insensitive — mesma lógica de _casar_regra_procedimento,
+    porque o nome que o modelo usa raramente bate byte a byte com o cadastrado ("Botox"
+    vs "Botox preventivo"). Sem match ou sem serviço informado, cai no padrão de 60min,
+    idêntico ao comportamento antes de existir duração por serviço."""
+    alvo = (service_nome or "").strip().lower()
+    if not alvo:
+        return SLOT_DURATION_MINUTES
+    try:
+        servicos = (
+            sb.table("services")
+            .select("nome, duracao_min")
+            .eq("tenant_id", tenant_id)
+            .eq("ativo", True)
+            .execute()
+        ).data or []
+    except Exception:
+        return SLOT_DURATION_MINUTES
+    for s in servicos:
+        nome = str(s.get("nome") or "").strip().lower()
+        if nome and (nome in alvo or alvo in nome):
+            return int(s.get("duracao_min") or SLOT_DURATION_MINUTES)
+    return SLOT_DURATION_MINUTES
 
 
 def _localizar_scheduled_at(raw: str) -> str:
@@ -203,7 +231,9 @@ async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
             "message": f"Não atendemos em {display_date} (fechado nesse dia).",
         }
 
-    duracao = timedelta(minutes=SLOT_DURATION_MINUTES)
+    sb = mem.get_client()
+    duracao_min = _buscar_duracao_servico(sb, str(tenant["id"]), inp.get("service"))
+    duracao = timedelta(minutes=duracao_min)
     abertura_str, fechamento_str = expediente
     abertura = datetime.combine(parsed_date.date(), datetime.strptime(abertura_str, "%H:%M").time(), tzinfo=FORTALEZA_TZ)
     fechamento = datetime.combine(parsed_date.date(), datetime.strptime(fechamento_str, "%H:%M").time(), tzinfo=FORTALEZA_TZ)
@@ -227,22 +257,31 @@ async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
     dia_inicio = datetime.combine(parsed_date.date(), datetime.min.time(), tzinfo=FORTALEZA_TZ)
     dia_fim = dia_inicio + timedelta(days=1)
 
-    sb = mem.get_client()
     ocupados_raw = (
         sb.table("appointments")
-        .select("scheduled_at")
+        .select("scheduled_at, duracao_min")
         .eq("tenant_id", str(tenant["id"]))
         .is_("cancelled_at", "null")  # horário cancelado volta a ser vendável
         .gte("scheduled_at", dia_inicio.isoformat())
         .lt("scheduled_at", dia_fim.isoformat())
         .execute()
     ).data or []
-    ocupados = [datetime.fromisoformat(r["scheduled_at"]).astimezone(FORTALEZA_TZ) for r in ocupados_raw]
+    # Cada agendamento existente ocupa a duração QUE ELE tem (capturada no momento em
+    # que foi marcado), não a duração do serviço que está sendo checado agora — um
+    # Botox de 30min já marcado não pode virar 90min só porque agora alguém está
+    # consultando disponibilidade pra outro procedimento mais longo.
+    ocupados = [
+        (
+            datetime.fromisoformat(r["scheduled_at"]).astimezone(FORTALEZA_TZ),
+            timedelta(minutes=r.get("duracao_min") or SLOT_DURATION_MINUTES),
+        )
+        for r in ocupados_raw
+    ]
 
     def _colide(inicio_candidato: datetime) -> bool:
         fim_candidato = inicio_candidato + duracao
-        for ocupado_inicio in ocupados:
-            ocupado_fim = ocupado_inicio + duracao
+        for ocupado_inicio, ocupado_duracao in ocupados:
+            ocupado_fim = ocupado_inicio + ocupado_duracao
             if inicio_candidato < ocupado_fim and ocupado_inicio < fim_candidato:
                 return True
         return False
@@ -274,6 +313,10 @@ async def _check_availability(inp: dict, tenant: dict, phone: str) -> dict:
 async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
     sb = mem.get_client()
     scheduled_at = _localizar_scheduled_at(inp["scheduled_at"])
+    # Duração capturada AGORA, não recalculada depois lendo services toda vez — se a
+    # clínica mudar a duração cadastrada de um serviço no futuro, agendamentos já feitos
+    # não mudam de tamanho retroativamente.
+    duracao_min = _buscar_duracao_servico(sb, str(tenant["id"]), inp.get("service"))
 
     # Evita duplicar: se o lead já tem um agendamento futuro em aberto, atualiza em vez de
     # inserir outro (acontece quando o lead confirma de novo depois de já confirmado, e
@@ -304,6 +347,7 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
             sb.table("appointments").update({
                 "service":      inp["service"],
                 "scheduled_at": scheduled_at,
+                "duracao_min":  duracao_min,
             }).eq("id", appointment_id).execute()
         else:
             row = sb.table("appointments").insert({
@@ -311,6 +355,7 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
                 "tenant_id":    str(tenant["id"]),
                 "service":      inp["service"],
                 "scheduled_at": scheduled_at,
+                "duracao_min":  duracao_min,
             }).execute()
             appointment_id = row.data[0]["id"]
     except Exception as e:
