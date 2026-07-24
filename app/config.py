@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     admin_api_key: str = ""
     whatsapp_app_secret: str = ""
+    # Segredo fixo embutido no link do formulário de cadastro (Lovable). Único e
+    # reutilizável pra todo cliente novo — troca só se vazar. Sem essa chave, o endpoint
+    # de intake fica desligado (nenhum X-Onboarding-Key bate com string vazia).
+    onboarding_secret: str = ""
     port: int = 8000
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

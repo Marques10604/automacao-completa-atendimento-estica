@@ -35,6 +35,7 @@ from app.jobs.scheduler import get_scheduler
 from app.services.failure_service import registrar_falha, escalar_por_falhas
 from app.services.transcription_service import transcrever_audio_whatsapp
 from app.services.report_service import detectar_comando_relatorio, montar_relatorio, remetente_e_staff
+from app.services.onboarding_service import processar_intake
 from app.webhooks.media_fallback import resposta_midia_nao_suportada
 from app.config import settings
 
@@ -507,6 +508,50 @@ def _verificar_admin(x_admin_key: str | None) -> None:
     """Rejeita requisições sem a chave de admin correta."""
     if ADMIN_API_KEY and x_admin_key != ADMIN_API_KEY:
         raise HTTPException(status_code=401, detail="Chave de admin inválida ou ausente")
+
+
+@app.post("/onboarding/intake")
+@limiter.limit("10/minute")
+async def onboarding_intake(request: Request, x_onboarding_key: str | None = Header(default=None)):
+    """
+    Recebe o formulário de cadastro de cliente novo (preenchido pelo próprio dono da
+    clínica, via link fixo do formulário) e cria/atualiza o tenant + catálogo de
+    serviços + FAQ direto no Supabase — sem inserção manual.
+
+    Protegido por segredo fixo (ONBOARDING_SECRET), não por chave por cliente: o mesmo
+    link serve pra qualquer cliente novo, pra sempre, sem precisar gerar nada a cada
+    venda. Não mexe em phone_number_id/token do WhatsApp — isso é passo manual à parte,
+    feito depois de registrar o número na Meta.
+
+    Payload esperado:
+    {
+      "clinic_name": "Clínica Bela Estética",
+      "professional_name": "Sofia",
+      "staff_phone": "5585999998888",
+      "tenant_slug": "clinica-bela",              // opcional — deriva de clinic_name se ausente
+      "horarios": {"seg": ["09:00","19:00"], ...}, // opcional
+      "servicos": [
+        {"nome": "Limpeza de pele", "preco": 180, "preco_a_partir_de": false, "duracao_min": 60}
+      ],
+      "faq": [
+        {"pergunta": "Tem estacionamento?", "resposta": "Sim, gratuito."}
+      ]
+    }
+    """
+    if not settings.onboarding_secret or x_onboarding_key != settings.onboarding_secret:
+        raise HTTPException(status_code=401, detail="Chave de onboarding inválida ou ausente")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Payload JSON inválido")
+
+    resultado = await asyncio.to_thread(processar_intake, payload)
+    if not resultado.get("success"):
+        raise HTTPException(status_code=422, detail={"erros": resultado.get("erros")})
+
+    logger.info("Onboarding concluído: tenant_slug=%s", resultado.get("tenant_slug"))
+    return JSONResponse(content=resultado)
 
 
 @app.get("/tenants")
