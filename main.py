@@ -23,6 +23,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.limiter import limiter
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger(__name__)
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -365,12 +366,23 @@ async def webhook_whatsapp(request: Request):
         detalhe = _json.dumps(_status, ensure_ascii=False)[:2000]
         logger.warning("STATUS DE ENTREGA: %s", detalhe)
         try:
-            await asyncio.to_thread(
-                registrar_falha, "diagnostico", None, _status.get("recipient_id", ""),
-                "whatsapp", "delivery_status", detalhe,
-            )
-        except Exception as e:
-            logger.error("Falha ao registrar delivery_status: %s", e)
+            _phone_number_id_diag = body["entry"][0]["changes"][0]["value"]["metadata"]["phone_number_id"]
+        except (KeyError, IndexError, TypeError):
+            _phone_number_id_diag = None
+        _tenant_diag = mem.get_tenant_by_phone_number_id(_phone_number_id_diag) if _phone_number_id_diag else None
+        if _tenant_diag:
+            try:
+                # tipo_falha usa "envio" (categoria já existente no CHECK da tabela) — não é
+                # falha de verdade quando o status é sent/delivered/read, mas registrar_falha
+                # não conta pra escalação sem lead_id, então é só trilha de diagnóstico.
+                await asyncio.to_thread(
+                    registrar_falha, str(_tenant_diag["id"]), None, _status.get("recipient_id", ""),
+                    "whatsapp", "envio", detalhe,
+                )
+            except Exception as e:
+                logger.error("Falha ao registrar delivery_status: %s", e)
+        else:
+            logger.error("STATUS DE ENTREGA sem tenant resolvido (phone_number_id=%s) — não gravado em agent_failures", _phone_number_id_diag)
         return JSONResponse(content={"status": "status_registrado", "delivery": _status.get("status")})
 
     phone, mensagem, phone_number_id, wamid, tipo, media_id = _extrair_mensagem_whatsapp(body)
