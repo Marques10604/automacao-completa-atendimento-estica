@@ -363,6 +363,31 @@ Estado 100% no Supabase — reinicializações do Railway não perdem nenhum job
 
 ---
 
+## Status em andamento — Error tracking via Better Stack (pausado em 2026-07-25, retomar daqui)
+
+**Objetivo:** receber alerta (e-mail e/ou telefone) sempre que o agente der erro em produção.
+
+**Já feito (commitado e em produção — commit `083aaf2`, push confirmado):**
+- Conta criada no Better Stack, produto **Error tracking** (é o certo — Sentry-compatible; os outros produtos da conta — Uptime, Telemetry/Logs, Real user monitoring — não servem pra esse caso)
+- Aplicação "Agente de Atendimento Estetica" criada lá, platform=FastAPI, id `2627458`
+- `sentry-sdk[fastapi]` adicionado ao `requirements.txt`
+- `app/config.py`: campo `better_stack_dsn` (opcional — sem a chave o agente roda normal, só não reporta erro)
+- `.env.example` documentado com `BETTER_STACK_DSN=`
+- `.env` local com o DSN real preenchido
+- `main.py`: `sentry_sdk.init(dsn=settings.better_stack_dsn)` logo após carregar `settings`, só roda se a chave existir
+- Testado local: evento de teste chegou em Better Stack (`Errors` list, id `ef8c2964...`)
+- Variável `BETTER_STACK_DSN` cadastrada no Railway (usuário confirmou) e deploy feito — mas **ainda não confirmamos que um erro real em produção dispara o evento** (só foi testado local)
+
+**Falta (próximo passo ao retomar):**
+- Achar onde configurar o **alerta automático de e-mail/telefone** para novos erros do Error tracking. Já eliminamos: "Report incident" (é manual, dispara um incidente por vez, não é regra automática) e a área de **Uptime → Incidents/Escalation policies** (isso é pra monitores de uptime, não confirmado se está linkado ao Error tracking).
+- Próxima tentativa: aba **"Advanced settings"** dentro da aplicação em `errors.betterstack.com/team/t574632/applications/2627458` (ainda não vista — era uma das abas ao lado de "Ingest", "Frontend", "Group & transform")
+- Se não tiver lá, tentar `betterstack.com/settings/alerts` (área geral de Settings da conta, ainda não visitada)
+- Depois de configurar, testar de novo (gerar um erro de propósito) pra confirmar que o alerta chega no e-mail/telefone
+
+Ver memória `better_stack_pendente` para o histórico completo da sessão.
+
+---
+
 ## Como trabalhar neste projeto
 
 1. Leia este arquivo (`CONTEXT.md`) **inteiro** antes de qualquer tarefa
