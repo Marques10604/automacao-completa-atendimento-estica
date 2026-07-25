@@ -537,7 +537,7 @@
                             nome: nome,
                             preco: parseMoneyString(row.querySelector('.s-preco').value),
                             preco_a_partir_de: row.querySelector('.s-apartir').checked,
-                            duracao_min: parseInt(row.querySelector('.s-duracao').value) || 0,
+                            duracao_min: parseInt(row.querySelector('.s-duracao').value) || 60,
                             descricao: row.querySelector('.s-desc').value.trim()
                         });
                     });
