@@ -15,6 +15,8 @@ A Meta lançou o **WhatsApp Business AI** nativo no Brasil em fev/2026 — de gr
 5. **Motor de referral com código rastreável** — hoje o job `pos_venda` só *pede* indicação em texto solto; falta gerar código + registrar + recompensar quando o indicado fecha. ⏸️ **Adiado** — ver decisão abaixo.
 
 > ⏸️ **Roadmap pausado a partir do item 5 (2026-07-22).** Decisão de priorizar o catálogo de serviços estruturado como fundação do painel de autoatendimento do cliente — sem ele, cada cliente novo exige configuração manual no Supabase pelo desenvolvedor, que vira o gargalo do crescimento. Ver `docs/superpowers/decisoes/2026-07-22-catalogo-de-servicos-e-painel.md`. Os itens 5-8 seguem válidos e voltam depois da fundação.
+>
+> **Fundação entregue (2026-07-25):** catálogo em tabelas próprias + endpoint `/onboarding/intake` já em produção, e o formulário de auto-cadastro (`cadastro-clinica.html`) foi criado e salvo no repo — é a interface de auto-cadastro do primeiro cliente, não o painel multi-tenant com autenticação (esse segue não implementado). Itens 5-8 continuam pendentes.
 6. **Integração com sistema de gestão da clínica** (Feegow via API aberta / Clinicorp, Shosp, iClinic via RPA quando não há API) — insight de upsell: a maioria dos sistemas de clínica no Brasil não tem API pública boa, o que torna essa integração um serviço vendável à parte (setup + manutenção recorrente), difícil de replicar por concorrentes genéricos.
 7. **Pedido de review/reputação pós-venda** (D+2 pós-procedimento) — nenhum job de follow-up hoje pede avaliação.
 8. **Sync com Google Calendar** — escolhido sobre Cal.com porque toda clínica já usa Google Calendar no dia a dia (zero fricção de adoção) e o produto é multi-tenant (OAuth por tenant, agenda já existente como espelho).

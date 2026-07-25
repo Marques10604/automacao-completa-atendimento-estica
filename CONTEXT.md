@@ -388,6 +388,18 @@ Ver memória `better_stack_pendente` para o histórico completo da sessão.
 
 ---
 
+## Onboarding self-service — formulário de cadastro do cliente (concluído em 2026-07-25)
+
+Formulário HTML standalone (`cadastro-clinica.html`, raiz do projeto) permite que o cliente novo se cadastre sozinho, sem o desenvolvedor editar JSONB na mão: dados da clínica, horário de funcionamento por dia da semana, serviços (nome/preço/duração/descrição), FAQ, e uma seção avançada opcional de recall e cross-sell.
+
+Envia `POST` para `https://automacao-completa-atendimento-estica-production.up.railway.app/onboarding/intake`, protegido por `ONBOARDING_SECRET` (header `X-Onboarding-Key`). O backend já existe e está em produção desde o commit `87e1cf8` — `main.py:531` recebe, `app/services/onboarding_service.py::processar_intake()` grava tenant + tabelas `services`/`faq` no Supabase (substituindo o catálogo por completo a cada envio).
+
+Isso é a "tela" prevista na decisão `docs/superpowers/decisoes/2026-07-22-catalogo-de-servicos-e-painel.md` — não é o painel multi-tenant com autenticação (isso segue fora de escopo). É um formulário único sem login, protegido só pela chave compartilhada, pensado para o primeiro cliente se cadastrar.
+
+**Falta manual, fora do formulário:** registrar o número de WhatsApp do cliente na Meta e vincular `phone_number_id` ao tenant (o próprio retorno do endpoint lembra disso em `proximo_passo`).
+
+---
+
 ## Como trabalhar neste projeto
 
 1. Leia este arquivo (`CONTEXT.md`) **inteiro** antes de qualquer tarefa

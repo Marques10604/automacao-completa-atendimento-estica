@@ -78,8 +78,15 @@ Motivo: uma clínica tem ~20 serviços e um punhado de políticas — cabe folga
 - Serviço inativo: apaga ou desativa? (agendamentos antigos referenciam ele)
 - O FAQ é campo livre por tenant ou tem categorias fixas?
 
+## Atualização (2026-07-25): interface de auto-cadastro entregue
+
+A fundação (tabelas `services`/`faq` próprias + endpoint `/onboarding/intake`) foi commitada em `315fea4` e `87e1cf8`. Em seguida, um formulário HTML standalone (`cadastro-clinica.html`, raiz do repo) foi criado como a "interface" desta decisão — cobre clínica, horários, serviços, FAQ e a seção avançada de recall/cross-sell, chamando o endpoint já existente.
+
+Isso **não** é o painel multi-tenant com autenticação (item explicitamente fora de escopo acima) — é um formulário único, sem login, protegido pelo segredo compartilhado `ONBOARDING_SECRET`, pensado para o auto-cadastro do primeiro cliente. O painel completo com autenticação por dono de clínica segue não implementado.
+
 ## Referências
 
 - Roadmap dos diferenciais: `docs/superpowers/plans/2026-07-22-diferenciais-upsell.md`
 - Casamento por substring: `app/agent/tools.py::_casar_regra_procedimento`
 - Montagem do prompt a partir do tenant: `app/agent/prompts.py::build_prompt`
+- Formulário de auto-cadastro: `cadastro-clinica.html` (raiz do repo) + `app/services/onboarding_service.py`

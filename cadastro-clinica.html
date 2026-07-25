@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cadastro da Clínica - Automação</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            bg: '#EFECE6',
+                            text: '#332E28',
+                            muted: '#BCB4A9',
+                            accent: '#E23B2E',
+                            dark: '#14120F'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom Toggle Switch Styles */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #E23B2E;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #E23B2E;
+        }
+        .toggle-checkbox:checked + .toggle-label:after {
+            transform: translateX(100%);
+            border-color: white;
+        }
+        .toggle-label {
+            width: 40px;
+            height: 24px;
+            background-color: #d1d5db;
+            border-radius: 9999px;
+            position: relative;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .toggle-label:after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background-color: white;
+            border-radius: 50%;
+            transition: transform 0.2s ease-in-out;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        
+        /* Subtle Focus Styles */
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #E23B2E !important;
+            box-shadow: 0 0 0 1px #E23B2E !important;
+        }
+
+        /* Hide scrollbar for cleaner look if needed */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #EFECE6;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #BCB4A9;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="bg-brand-bg text-brand-text font-sans antialiased min-h-screen">
+
+    <main class="max-w-3xl mx-auto px-4 py-12 sm:px-6 lg:px-8">
+        
+        <header class="mb-10 text-center">
+            <h1 class="text-3xl font-semibold tracking-tight text-brand-dark mb-2">Automação Completa</h1>
+            <p class="text-brand-muted text-base">Configure o atendimento da sua clínica em poucos minutos</p>
+        </header>
+
+        <!-- Success Screen (Hidden by default) -->
+        <div id="success-screen" class="hidden flex-col items-center justify-center py-20 text-center">
+            <div class="w-16 h-16 rounded-full bg-brand-accent/10 flex items-center justify-center mb-6">
+                <svg class="w-8 h-8 text-brand-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path></svg>
+            </div>
+            <h2 class="text-2xl font-semibold mb-2">Cadastro recebido!</h2>
+            <p class="text-brand-muted">Em breve seu atendimento estará ativo.</p>
+            <div id="success-warnings" class="mt-6 text-sm text-left max-w-md w-full border-l-4 border-yellow-400 bg-yellow-50 p-4 hidden">
+                <p class="font-medium text-yellow-800 mb-1">Avisos do sistema:</p>
+                <ul id="success-warnings-list" class="list-disc pl-5 text-yellow-700"></ul>
+            </div>
+        </div>
+
+        <form id="onboarding-form" class="space-y-12">
+
+            <section class="bg-white/50 rounded-xl p-6 shadow-sm border border-brand-muted/20">
+                <h2 class="text-lg font-semibold mb-6 pb-2 border-b border-brand-muted/20">1. Sobre a clínica</h2>
+                
+                <div class="space-y-5">
+                    <div>
+                        <label for="clinic_name" class="block text-sm font-medium text-brand-text mb-1">Nome da clínica *</label>
+                        <input type="text" id="clinic_name" name="clinic_name" required
+                            class="w-full px-3 py-2 bg-white border border-brand-muted/40 rounded-md shadow-sm placeholder-brand-muted/50 transition-colors">
+                    </div>
+
+                    <div>
+                        <label for="professional_name" class="block text-sm font-medium text-brand-text mb-1">Nome de quem atende no WhatsApp *</label>
+                        <input type="text" id="professional_name" name="professional_name" required
+                            class="w-full px-3 py-2 bg-white border border-brand-muted/40 rounded-md shadow-sm placeholder-brand-muted/50 transition-colors">
+                        <p class="mt-1 text-xs text-brand-muted">Pode ser seu nome ou um nome fictício de atendente.</p>
+                    </div>
+
+                    <div>
+                        <label for="staff_phone" class="block text-sm font-medium text-brand-text mb-1">WhatsApp para alertas *</label>
+                        <input type="tel" id="staff_phone" name="staff_phone" required placeholder="(00) 00000-0000"
+                            class="w-full px-3 py-2 bg-white border border-brand-muted/40 rounded-md shadow-sm placeholder-brand-muted/50 transition-colors">
+                        <p class="mt-1 text-xs text-brand-muted">Você vai receber um resumo diário e ser avisado se precisar assumir uma conversa.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="bg-white/50 rounded-xl p-6 shadow-sm border border-brand-muted/20">
+                <h2 class="text-lg font-semibold mb-6 pb-2 border-b border-brand-muted/20">2. Horário de funcionamento</h2>
+                
+                <div class="space-y-4" id="hours-container">
+                    <!-- JavaScript will populate days here -->
+                </div>
+            </section>
+
+            <section class="bg-white/50 rounded-xl p-6 shadow-sm border border-brand-muted/20">
+                <h2 class="text-lg font-semibold mb-6 pb-2 border-b border-brand-muted/20">3. Serviços oferecidos</h2>
+                
+                <div id="services-container" class="space-y-6">
+                    <!-- Service rows will be injected here -->
+                </div>
+                
+                <button type="button" id="btn-add-service" class="mt-6 inline-flex items-center text-sm font-medium text-brand-text hover:text-brand-accent transition-colors">
+                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                    Adicionar outro serviço
+                </button>
+            </section>
+
+            <section class="bg-white/50 rounded-xl p-6 shadow-sm border border-brand-muted/20">
+                <h2 class="text-lg font-semibold mb-6 pb-2 border-b border-brand-muted/20">4. Perguntas frequentes</h2>
+                
+                <div id="faq-container" class="space-y-6">
+                    <!-- FAQ rows will be injected here -->
+                </div>
+                
+                <button type="button" id="btn-add-faq" class="mt-6 inline-flex items-center text-sm font-medium text-brand-text hover:text-brand-accent transition-colors">
+                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                    Adicionar pergunta
+                </button>
+            </section>
+
+            <section class="bg-white/50 rounded-xl p-6 shadow-sm border border-brand-muted/20">
+                <div class="flex items-center justify-between cursor-pointer group" id="toggle-advanced">
+                    <div>
+                        <h2 class="text-lg font-semibold text-brand-text">5. Recall e indicações (Avançado)</h2>
+                        <p class="text-sm text-brand-muted mt-1 group-hover:text-brand-text transition-colors">Quero configurar isso agora (opcional)</p>
+                    </div>
+                    <svg id="advanced-chevron" class="w-5 h-5 text-brand-muted transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                </div>
+
+                <div id="advanced-content" class="hidden mt-6 pt-6 border-t border-brand-muted/20 space-y-10">
+                    
+                    <!-- 5a. Recall -->
+                    <div>
+                        <h3 class="text-md font-medium mb-1">Lembrete de retorno (Recall)</h3>
+                        <p class="text-xs text-brand-muted mb-4">Depois de quanto tempo o sistema deve lembrar o cliente de repetir um procedimento?</p>
+                        
+                        <div id="recall-container" class="space-y-4"></div>
+                        
+                        <button type="button" id="btn-add-recall" class="mt-4 inline-flex items-center text-sm font-medium text-brand-text hover:text-brand-accent transition-colors">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                            Adicionar lembrete
+                        </button>
+                    </div>
+
+                    <!-- 5b. Cross-sell -->
+                    <div>
+                        <h3 class="text-md font-medium mb-1">Sugestão de outro serviço (Cross-sell)</h3>
+                        <p class="text-xs text-brand-muted mb-4">Depois de um procedimento, quer que o sistema sugira outro complementar?</p>
+                        
+                        <div id="cross-sell-container" class="space-y-4"></div>
+                        
+                        <button type="button" id="btn-add-cross-sell" class="mt-4 inline-flex items-center text-sm font-medium text-brand-text hover:text-brand-accent transition-colors">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                            Adicionar sugestão
+                        </button>
+                    </div>
+
+                </div>
+            </section>
+
+            <div id="form-errors" class="hidden p-4 rounded-md bg-red-50 border border-red-200 text-sm text-red-600 mb-6"></div>
+
+            <div class="pt-6 flex justify-end">
+                <button type="submit" id="btn-submit" class="px-6 py-3 bg-brand-accent text-white font-medium rounded-md shadow-sm hover:bg-brand-accent/90 focus:ring-2 focus:ring-offset-2 focus:ring-brand-accent transition-all">
+                    Concluir cadastro
+                </button>
+            </div>
+        </form>
+    </main>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            
+            // --- CONSTANTS & STATE ---
+            const daysOfWeek = [
+                { id: 'seg', label: 'Segunda-feira' },
+                { id: 'ter', label: 'Terça-feira' },
+                { id: 'qua', label: 'Quarta-feira' },
+                { id: 'qui', label: 'Quinta-feira' },
+                { id: 'sex', label: 'Sexta-feira' },
+                { id: 'sab', label: 'Sábado' },
+                { id: 'dom', label: 'Domingo' }
+            ];
+
+            let serviceNames = []; // Used to populate dropdowns in section 5
+
+            // --- INITIALIZATION ---
+            initHours();
+            addServiceRow(); // Start with 1 empty service
+            addFaqRow("Ex: Vocês têm estacionamento?", ""); // Prefilled 1
+            addFaqRow("Ex: Quais formas de pagamento vocês aceitam?", ""); // Prefilled 2
+            
+            // --- EVENT LISTENERS ---
+            
+            // Section 2: Hours toggle logic
+            document.getElementById('hours-container').addEventListener('change', (e) => {
+                if(e.target.classList.contains('day-toggle')) {
+                    const day = e.target.dataset.day;
+                    const inputsDiv = document.getElementById(`time-inputs-${day}`);
+                    if(e.target.checked) {
+                        inputsDiv.classList.remove('hidden');
+                        inputsDiv.classList.add('flex');
+                    } else {
+                        inputsDiv.classList.add('hidden');
+                        inputsDiv.classList.remove('flex');
+                    }
+                }
+            });
+
+            // Add buttons
+            document.getElementById('btn-add-service').addEventListener('click', () => addServiceRow());
+            document.getElementById('btn-add-faq').addEventListener('click', () => addFaqRow());
+            document.getElementById('btn-add-recall').addEventListener('click', () => addRecallRow());
+            document.getElementById('btn-add-cross-sell').addEventListener('click', () => addCrossSellRow());
+
+            // Advanced section toggle
+            document.getElementById('toggle-advanced').addEventListener('click', () => {
+                const content = document.getElementById('advanced-content');
+                const chevron = document.getElementById('advanced-chevron');
+                content.classList.toggle('hidden');
+                if(!content.classList.contains('hidden')) {
+                    chevron.classList.add('rotate-180');
+                    updateServiceNames(); // Ensure dropdowns are fresh when opened
+                } else {
+                    chevron.classList.remove('rotate-180');
+                }
+            });
+
+            // Input masks
+            document.getElementById('staff_phone').addEventListener('input', phoneMask);
+
+            // Listen for service name changes to update dropdowns
+            document.getElementById('services-container').addEventListener('input', (e) => {
+                if(e.target.classList.contains('s-nome')) {
+                    updateServiceNames();
+                }
+            });
+
+            // Form Submit
+            document.getElementById('onboarding-form').addEventListener('submit', handleSubmit);
+
+
+            // --- FUNCTIONS ---
+
+            function initHours() {
+                const container = document.getElementById('hours-container');
+                daysOfWeek.forEach(day => {
+                    const isWeekend = day.id === 'dom';
+                    const checked = isWeekend ? '' : 'checked';
+                    const hiddenClass = isWeekend ? 'hidden' : 'flex';
+                    
+                    const html = `
+                        <div class="flex items-center justify-between p-3 rounded-md bg-white border border-brand-muted/20">
+                            <div class="flex items-center space-x-4 w-1/3">
+                                <div class="relative inline-block w-10 mr-2 align-middle select-none">
+                                    <input type="checkbox" name="toggle_${day.id}" id="toggle_${day.id}" data-day="${day.id}" class="day-toggle toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer z-10 opacity-0" ${checked}/>
+                                    <label for="toggle_${day.id}" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                                </div>
+                                <span class="text-sm font-medium w-24">${day.label}</span>
+                            </div>
+                            
+                            <div id="time-inputs-${day.id}" class="${hiddenClass} items-center space-x-2 w-2/3 justify-end">
+                                <input type="time" id="start_${day.id}" value="09:00" class="px-2 py-1 text-sm border border-brand-muted/40 rounded bg-white w-28 text-center">
+                                <span class="text-brand-muted text-sm">até</span>
+                                <input type="time" id="end_${day.id}" value="18:00" class="px-2 py-1 text-sm border border-brand-muted/40 rounded bg-white w-28 text-center">
+                            </div>
+                        </div>
+                    `;
+                    container.insertAdjacentHTML('beforeend', html);
+                });
+            }
+
+            function generateId() {
+                return Math.random().toString(36).substr(2, 9);
+            }
+
+            function addServiceRow() {
+                const container = document.getElementById('services-container');
+                const id = generateId();
+                const html = `
+                    <div class="service-row relative p-4 rounded-md border border-brand-muted/20 bg-white" id="srv-${id}">
+                        <button type="button" class="absolute top-2 right-2 text-brand-muted hover:text-red-500 transition-colors" onclick="this.closest('.service-row').remove(); updateServiceNames();" title="Remover serviço">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="block text-xs font-medium text-brand-muted mb-1 uppercase tracking-wide">Nome do Serviço *</label>
+                                <input type="text" class="s-nome w-full px-3 py-2 text-sm border border-brand-muted/40 rounded focus:ring-1 focus:ring-brand-accent focus:border-brand-accent bg-white" placeholder="Ex: Limpeza de Pele" required>
+                            </div>
+                            <div class="flex gap-4">
+                                <div class="flex-1">
+                                    <label class="block text-xs font-medium text-brand-muted mb-1 uppercase tracking-wide">Preço (R$)</label>
+                                    <input type="text" class="s-preco w-full px-3 py-2 text-sm border border-brand-muted/40 rounded focus:ring-1 focus:ring-brand-accent bg-white" placeholder="0,00" oninput="moneyMask(event)">
+                                </div>
+                                <div class="w-24">
+                                    <label class="block text-xs font-medium text-brand-muted mb-1 uppercase tracking-wide" title="Duração em minutos">Minutos</label>
+                                    <input type="number" class="s-duracao w-full px-3 py-2 text-sm border border-brand-muted/40 rounded focus:ring-1 focus:ring-brand-accent bg-white" placeholder="60">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-4 flex items-center">
+                            <input type="checkbox" id="apartir-${id}" class="s-apartir w-4 h-4 text-brand-accent border-brand-muted/40 rounded focus:ring-brand-accent">
+                            <label for="apartir-${id}" class="ml-2 block text-sm text-brand-text">Preço "a partir de" (valor variável)</label>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-xs font-medium text-brand-muted mb-1 uppercase tracking-wide">Descrição curta (opcional)</label>
+                            <input type="text" class="s-desc w-full px-3 py-2 text-sm border border-brand-muted/40 rounded focus:ring-1 focus:ring-brand-accent bg-white" placeholder="Breve explicação para o cliente">
+                        </div>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', html);
+            }
+
+            function addFaqRow(qPlaceholder = "Pergunta", aPlaceholder = "Resposta") {
+                const container = document.getElementById('faq-container');
+                const html = `
+                    <div class="faq-row relative p-4 rounded-md border border-brand-muted/20 bg-white">
+                        <button type="button" class="absolute top-2 right-2 text-brand-muted hover:text-red-500 transition-colors" onclick="this.closest('.faq-row').remove();" title="Remover pergunta">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                        <div class="space-y-3 pr-6">
+                            <input type="text" class="f-pergunta w-full px-3 py-2 text-sm font-medium border border-brand-muted/40 rounded focus:ring-1 focus:ring-brand-accent bg-white" placeholder="${qPlaceholder}">
+                            <textarea class="f-resposta w-full px-3 py-2 text-sm border border-brand-muted/40 rounded focus:ring-1 focus:ring-brand-accent bg-white resize-none" rows="2" placeholder="${aPlaceholder}"></textarea>
+                        </div>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', html);
+            }
+
+            function updateServiceNames() {
+                // Get all valid service names from section 3
+                const inputs = document.querySelectorAll('.s-nome');
+                serviceNames = Array.from(inputs).map(input => input.value.trim()).filter(val => val !== '');
+                
+                // Update all existing dropdowns in section 5
+                const dropdowns = document.querySelectorAll('.service-dropdown');
+                dropdowns.forEach(select => {
+                    const currentValue = select.value;
+                    select.innerHTML = '<option value="">Selecione um serviço...</option>';
+                    serviceNames.forEach(name => {
+                        const option = document.createElement('option');
+                        option.value = name;
+                        option.textContent = name;
+                        select.appendChild(option);
+                    });
+                    // Try to restore previous selection if it still exists
+                    if(serviceNames.includes(currentValue)) {
+                        select.value = currentValue;
+                    }
+                });
+            }
+
+            function getServiceOptionsHTML() {
+                let options = '<option value="">Selecione um serviço...</option>';
+                serviceNames.forEach(name => {
+                    options += `<option value="${name.replace(/"/g, '&quot;')}">${name}</option>`;
+                });
+                return options;
+            }
+
+            function addRecallRow() {
+                updateServiceNames(); // Ensure list is current
+                const container = document.getElementById('recall-container');
+                const html = `
+                    <div class="recall-row flex items-center space-x-3 bg-white p-3 rounded border border-brand-muted/20">
+                        <select class="r-servico service-dropdown flex-1 px-3 py-2 text-sm border border-brand-muted/40 rounded bg-white">
+                            ${getServiceOptionsHTML()}
+                        </select>
+                        <span class="text-sm text-brand-muted">depois de</span>
+                        <input type="number" class="r-dias w-20 px-3 py-2 text-sm border border-brand-muted/40 rounded bg-white text-center" placeholder="Dias">
+                        <button type="button" class="text-brand-muted hover:text-red-500 p-1" onclick="this.closest('.recall-row').remove();">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', html);
+            }
+
+            function addCrossSellRow() {
+                updateServiceNames();
+                const container = document.getElementById('cross-sell-container');
+                const html = `
+                    <div class="cross-sell-row grid grid-cols-[1fr_auto_1fr_auto_auto] gap-2 items-center bg-white p-3 rounded border border-brand-muted/20">
+                        <select class="cs-feito service-dropdown w-full px-3 py-2 text-sm border border-brand-muted/40 rounded bg-white" title="Serviço realizado">
+                            ${getServiceOptionsHTML()}
+                        </select>
+                        <svg class="w-4 h-4 text-brand-muted mx-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                        <select class="cs-oferecer service-dropdown w-full px-3 py-2 text-sm border border-brand-muted/40 rounded bg-white" title="Serviço a oferecer">
+                            ${getServiceOptionsHTML()}
+                        </select>
+                        <div class="flex items-center space-x-2 ml-2">
+                            <span class="text-sm text-brand-muted text-xs">em (dias)</span>
+                            <input type="number" class="cs-dias w-16 px-2 py-2 text-sm border border-brand-muted/40 rounded bg-white text-center" placeholder="Ex: 5">
+                        </div>
+                        <button type="button" class="text-brand-muted hover:text-red-500 p-1 ml-1" onclick="this.closest('.cross-sell-row').remove();">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', html);
+            }
+
+            function phoneMask(e) {
+                let v = e.target.value.replace(/\D/g, '');
+                if (v.length > 11) v = v.slice(0,11);
+                
+                if (v.length > 2 && v.length <= 6) {
+                    v = `(${v.slice(0,2)}) ${v.slice(2)}`;
+                } else if (v.length > 6 && v.length <= 10) {
+                    v = `(${v.slice(0,2)}) ${v.slice(2,6)}-${v.slice(6)}`;
+                } else if (v.length > 10) {
+                    v = `(${v.slice(0,2)}) ${v.slice(2,7)}-${v.slice(7)}`;
+                }
+                e.target.value = v;
+            }
+
+            // Make mask globally available for inline oninput handlers
+            window.moneyMask = function(e) {
+                let value = e.target.value.replace(/\D/g, "");
+                if (value === "") {
+                    e.target.value = "";
+                    return;
+                }
+                value = (parseInt(value) / 100).toFixed(2) + "";
+                value = value.replace(".", ",");
+                value = value.replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1.");
+                e.target.value = value;
+            }
+
+            function parseMoneyString(str) {
+                if(!str) return 0;
+                let clean = str.replace(/\./g, '').replace(',', '.');
+                return parseFloat(clean) || 0;
+            }
+
+            async function handleSubmit(e) {
+                e.preventDefault();
+                
+                const errorBox = document.getElementById('form-errors');
+                errorBox.classList.add('hidden');
+                errorBox.innerHTML = '';
+
+                const submitBtn = document.getElementById('btn-submit');
+                const originalBtnText = submitBtn.innerHTML;
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Enviando...';
+
+                try {
+                    // 1. Build Payload
+                    let phoneRaw = document.getElementById('staff_phone').value.replace(/\D/g, '');
+                    if (phoneRaw.length === 10 || phoneRaw.length === 11) {
+                        phoneRaw = '55' + phoneRaw;
+                    }
+
+                    const payload = {
+                        clinic_name: document.getElementById('clinic_name').value.trim(),
+                        professional_name: document.getElementById('professional_name').value.trim(),
+                        staff_phone: phoneRaw,
+                        horarios: {},
+                        servicos: [],
+                        faq: [],
+                        recall: [],
+                        cross_sell: []
+                    };
+
+                    // Gather Hours
+                    daysOfWeek.forEach(day => {
+                        const isOpen = document.getElementById(`toggle_${day.id}`).checked;
+                        if (isOpen) {
+                            payload.horarios[day.id] = [
+                                document.getElementById(`start_${day.id}`).value || '09:00',
+                                document.getElementById(`end_${day.id}`).value || '18:00'
+                            ];
+                        } else {
+                            payload.horarios[day.id] = null;
+                        }
+                    });
+
+                    // Gather Services
+                    document.querySelectorAll('.service-row').forEach(row => {
+                        const nome = row.querySelector('.s-nome').value.trim();
+                        if (!nome) return; // Skip empty rows
+                        
+                        payload.servicos.push({
+                            nome: nome,
+                            preco: parseMoneyString(row.querySelector('.s-preco').value),
+                            preco_a_partir_de: row.querySelector('.s-apartir').checked,
+                            duracao_min: parseInt(row.querySelector('.s-duracao').value) || 0,
+                            descricao: row.querySelector('.s-desc').value.trim()
+                        });
+                    });
+
+                    // Validation Check
+                    if (payload.servicos.length === 0) {
+                        throw new Error("Adicione pelo menos um serviço na Seção 3.");
+                    }
+
+                    // Gather FAQ
+                    document.querySelectorAll('.faq-row').forEach(row => {
+                        const q = row.querySelector('.f-pergunta').value.trim();
+                        const a = row.querySelector('.f-resposta').value.trim();
+                        if (q && a) {
+                            payload.faq.push({ pergunta: q, resposta: a });
+                        }
+                    });
+
+                    // Gather Advanced (only if section is used/has items)
+                    document.querySelectorAll('.recall-row').forEach(row => {
+                        const srv = row.querySelector('.r-servico').value;
+                        const dias = parseInt(row.querySelector('.r-dias').value);
+                        if (srv && !isNaN(dias)) {
+                            payload.recall.push({ servico: srv, dias: dias });
+                        }
+                    });
+
+                    document.querySelectorAll('.cross-sell-row').forEach(row => {
+                        const feito = row.querySelector('.cs-feito').value;
+                        const oferecer = row.querySelector('.cs-oferecer').value;
+                        const dias = parseInt(row.querySelector('.cs-dias').value);
+                        if (feito && oferecer && !isNaN(dias)) {
+                            payload.cross_sell.push({ servico_feito: feito, oferecer: oferecer, dias: dias });
+                        }
+                    });
+
+                    // 2. Send Request
+                    const response = await fetch('https://automacao-completa-atendimento-estica-production.up.railway.app/onboarding/intake', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Onboarding-Key': 'nxJOXqfCC0qp2GEQI2RexTxg7RP1QX4J'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const data = await response.json().catch(() => ({}));
+
+                    if (!response.ok) {
+                        if (response.status === 422 && data.erros && Array.isArray(data.erros)) {
+                            throw new Error(data.erros.join('<br>'));
+                        } else {
+                            throw new Error('Não conseguimos enviar o formulário agora. Verifique sua conexão ou tente novamente em instantes.');
+                        }
+                    }
+
+                    // 3. Success Handling
+                    document.getElementById('onboarding-form').classList.add('hidden');
+                    document.querySelector('header p').classList.add('hidden');
+                    const successScreen = document.getElementById('success-screen');
+                    successScreen.classList.remove('hidden');
+                    successScreen.classList.add('flex');
+
+                    // Show warnings if any
+                    if (data.avisos && Array.isArray(data.avisos) && data.avisos.length > 0) {
+                        const warningsDiv = document.getElementById('success-warnings');
+                        const warningsList = document.getElementById('success-warnings-list');
+                        warningsList.innerHTML = data.avisos.map(aviso => `<li>${aviso}</li>`).join('');
+                        warningsDiv.classList.remove('hidden');
+                    }
+                    
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+                } catch (err) {
+                    errorBox.innerHTML = `<strong>Atenção:</strong><br>${err.message}`;
+                    errorBox.classList.remove('hidden');
+                    // scroll to error
+                    errorBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = originalBtnText;
+                }
+            }
+
+        });
+    </script>
+</body>
+</html>
