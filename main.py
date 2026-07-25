@@ -40,6 +40,12 @@ from app.services.onboarding_service import processar_intake
 from app.webhooks.media_fallback import resposta_midia_nao_suportada
 from app.config import settings
 
+if settings.better_stack_dsn:
+    import sentry_sdk
+
+    sentry_sdk.init(dsn=settings.better_stack_dsn)
+    logger.info("Error tracking (Better Stack) ativo")
+
 # Fonte única: settings (pydantic-settings). Os os.getenv extras são compatibilidade
 # com os nomes que já circularam no .env deste projeto — VERIFY_TOKEN e
 # META_VERIFY_TOKEN conviviam, e ler só um deixava o token vazio: a verificação do

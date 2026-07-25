@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # reutilizável pra todo cliente novo — troca só se vazar. Sem essa chave, o endpoint
     # de intake fica desligado (nenhum X-Onboarding-Key bate com string vazia).
     onboarding_secret: str = ""
+    # Error tracking (Better Stack, compatível com Sentry SDK). Opcional: sem essa
+    # chave o sentry_sdk.init() simplesmente não roda, nada quebra.
+    better_stack_dsn: str = ""
     port: int = 8000
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
