@@ -589,6 +589,36 @@ async def list_tenants(x_admin_key: str | None = Header(default=None)):
     return mem.get_all_tenants()
 
 
+class VincularWhatsAppRequest(BaseModel):
+    phone_number_id: str
+    whatsapp_token: str | None = None  # opcional — se ausente, usa META_WA_TOKEN global (System User)
+
+
+@app.patch("/tenant/{tenant_name}/whatsapp")
+async def vincular_whatsapp(
+    tenant_name: str,
+    body: VincularWhatsAppRequest,
+    x_admin_key: str | None = Header(default=None),
+):
+    """Vincula o número de WhatsApp (phone_number_id da Meta) a um tenant já cadastrado.
+
+    O registro do número em si na Meta (verificação, geração do phone_number_id) continua
+    manual — depende de ação humana no Business Manager. Este endpoint só elimina o passo
+    de editar a linha no Supabase à mão depois de ter esse id em mãos."""
+    _verificar_admin(x_admin_key)
+    tenant = mem.get_tenant_by_name(tenant_name)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant não encontrado")
+
+    campos = {"phone_number_id": body.phone_number_id.strip()}
+    if body.whatsapp_token:
+        campos["whatsapp_token"] = body.whatsapp_token.strip()
+
+    sb = mem.get_client()
+    sb.table("tenants").update(campos).eq("id", tenant["id"]).execute()
+    return {"status": "ok", "tenant_slug": tenant_name, **campos}
+
+
 @app.get("/leads/{tenant_name}")
 async def list_leads(
     tenant_name: str,
