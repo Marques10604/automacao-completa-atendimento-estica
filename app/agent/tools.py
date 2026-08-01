@@ -83,12 +83,12 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "schedule_followup",
-        "description": "Agenda job de follow-up no Supabase. Por padrão dispara em D+1, mas aceita 'days' pra qualquer intervalo (ex: recall de procedimento daqui a 180 dias).",
+        "description": "Agenda job de follow-up no Supabase. Por padrão dispara em D+1, mas aceita 'days' pra qualquer intervalo (ex: recall de procedimento daqui a 180 dias). Não use para lembrete de agendamento — isso já é automático em book_appointment.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "lead_id":    {"type": "string"},
-                "job_type":   {"type": "string", "enum": ["appointment_reminder", "payment_recovery", "pos_venda", "recall_procedimento"]},
+                "job_type":   {"type": "string", "enum": ["payment_recovery", "pos_venda", "recall_procedimento"]},
                 "channel":    {"type": "string", "enum": ["whatsapp", "instagram"]},
                 "phone":      {"type": "string"},
                 "ig_user_id": {"type": "string"},
@@ -369,19 +369,13 @@ async def _book_appointment(inp: dict, tenant: dict, phone: str) -> dict:
 
     resultado = {"success": True, "appointment_id": appointment_id, "remarcado": remarcado}
 
-    # Recall e cross-sell são recriados por código logo abaixo, com data derivada do
-    # agendamento. Cancelar os antigos ANTES de recriar evita duplicata: sem isso, cada
-    # remarcação ou reconfirmação empilhava mais um job pendente, e o lead receberia a
-    # mesma oferta duas ou três vezes.
-    _cancelar_jobs_pendentes(sb, inp["lead_id"], ("recall_procedimento", "cross_sell"))
+    # Lembrete, recall e cross-sell são todos recriados por código logo abaixo, com data
+    # derivada do agendamento. Cancelar os antigos ANTES de recriar evita duplicata: sem
+    # isso, cada remarcação ou reconfirmação empilharia mais um job pendente, e o lead
+    # receberia a mesma oferta (ou o mesmo lembrete) duas ou três vezes.
+    _cancelar_jobs_pendentes(sb, inp["lead_id"], JOBS_DERIVADOS_DO_AGENDAMENTO)
 
-    # O lembrete é criado pelo modelo (schedule_followup), não por código — por isso só
-    # é cancelado quando a data mudou de fato. Cancelar sempre deixaria o lead sem
-    # lembrete nenhum nas vezes em que o modelo não recriasse.
-    if remarcado:
-        resultado["lembretes_antigos_cancelados"] = _cancelar_jobs_pendentes(
-            sb, inp["lead_id"], ("appointment_reminder",)
-        )
+    resultado["lembrete_agendado"] = _agendar_lembrete_agendamento(sb, inp, tenant, phone, scheduled_at)
 
     recall_info = _agendar_recall_se_configurado(sb, inp, tenant, phone, scheduled_at)
     if recall_info:
@@ -497,6 +491,30 @@ def _formatar_quando(scheduled_at: str | None) -> str:
         return datetime.fromisoformat(scheduled_at).astimezone(FORTALEZA_TZ).strftime("%d/%m/%Y às %H:%M")
     except (ValueError, TypeError):
         return ""
+
+
+def _agendar_lembrete_agendamento(sb, inp: dict, tenant: dict, phone: str, scheduled_at_localizado: str) -> dict:
+    """
+    Cria automaticamente o followup_job appointment_reminder, disparando 1 dia antes do
+    agendamento — sem depender do modelo lembrar de chamar schedule_followup nem calcular
+    a data na mão. Mesma lógica de _agendar_recall_se_configurado, mas incondicional:
+    todo agendamento tem lembrete, ao contrário de recall/cross-sell que só existem se o
+    tenant configurou a regra.
+    """
+    agendamento_em = datetime.fromisoformat(scheduled_at_localizado)
+    scheduled_at = (agendamento_em - timedelta(days=1)).isoformat()
+
+    row = sb.table("followup_jobs").insert({
+        "lead_id":      inp["lead_id"],
+        "tenant_id":    str(tenant["id"]),
+        "channel":      "whatsapp",
+        "phone":        phone,
+        "job_type":     "appointment_reminder",
+        "scheduled_at": scheduled_at,
+        "payload":      {},
+    }).execute()
+
+    return {"job_id": row.data[0]["id"], "scheduled_at": scheduled_at}
 
 
 def _agendar_recall_se_configurado(sb, inp: dict, tenant: dict, phone: str, scheduled_at_localizado: str) -> dict | None:
