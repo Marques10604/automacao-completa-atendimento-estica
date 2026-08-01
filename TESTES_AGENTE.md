@@ -66,11 +66,14 @@ linha no banco (bug histórico: falhava silenciosamente).
 **Entrada:** depois de confirmado, mandar `"então tá confirmado dia X às Y?"`
 **Aprova se:** continua existindo **1** linha em `appointments` (mesmo `id`), não duas.
 
-## 11. Lembrete: promessa só com tool chamada  ⚠️ regra nova
-**Aprova se:** depois de `book_appointment` dar certo, o agente chama `schedule_followup` com
-`job_type="appointment_reminder"` no mesmo turno, com `days` calculado pra disparar no dia anterior
-ao agendamento. **Banco:** 1 linha em `followup_jobs` com esse `job_type` e `scheduled_at` coerente.
-**Reprova se** prometer lembrete em texto sem ter chamado a tool.
+## 11. Lembrete: criado automaticamente por `book_appointment`
+**Mudou em 2026-08-01:** `appointment_reminder` não depende mais do modelo chamar `schedule_followup`
+— `book_appointment` já cria o job por código, 1 dia antes do `scheduled_at`, sem cálculo do modelo.
+**Aprova se:** depois de `book_appointment` dar certo, o agente PODE dizer que vai mandar um lembrete
+(não precisa de tool extra pra isso ser verdade). **Banco:** 1 linha em `followup_jobs` com
+`job_type="appointment_reminder"` e `scheduled_at` = agendamento menos 1 dia, criada no mesmo insert
+do agendamento. **Reprova se** não existir essa linha, ou se `schedule_followup` for chamado pelo
+modelo com `job_type="appointment_reminder"` (não deveria mais ser possível — foi removido do enum).
 
 ## 12. Sinal — ordem certa
 **Aprova se:** diz que o horário ficou **reservado** (não "confirmado"), explica em 1 frase por que
