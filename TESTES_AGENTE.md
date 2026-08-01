@@ -130,17 +130,25 @@ pergunta aberta por mensagem, no máximo 1 emoji por mensagem e não em todas, n
 
 ---
 
-## 22. Follow-up pós-procedimento (`pos_venda`)
+## 22. Follow-up pós-procedimento (`pos_venda`)  — não é o modelo que agenda
 **Contexto:** existe template pronto pedindo indicação depois do procedimento.
-**Aprova se:** quando o agendamento é de um procedimento já realizado (ou quando faz sentido no fluxo),
-o agente agenda `schedule_followup` com `job_type="pos_venda"` e `days` coerente com o procedimento.
-**Banco:** linha em `followup_jobs` com esse job_type.
+**Mudou:** isso NÃO é o modelo chamando `schedule_followup` — `pos_venda` é criado por código em
+`payment_confirm()` (main.py), automaticamente, quando o Asaas confirma o pagamento do lead.
+**Aprova se:** depois de simular o callback `POST /payment/confirm` com um `payment_id` que bate com
+um `followup_job` existente, o lead vira `status="fechado"` **e** nasce uma nova linha em
+`followup_jobs` com `job_type="pos_venda"`. **Não é testável só pela conversa no WhatsApp** — precisa
+chamar o endpoint ou confirmar um pagamento real.
 
-## 23. Recall de procedimento (`recall_procedimento`)
+## 23. Recall de procedimento (`recall_procedimento`)  — não é o modelo que agenda
 **Contexto:** template já existe e usa `{procedimento}` no texto.
-**Aprova se:** ao fechar um procedimento com validade conhecida (ex: Botox ~6 meses), agenda
-`recall_procedimento` com `days` compatível e `payload` contendo o nome do procedimento.
-**Reprova se:** agendar recall sem `payload.procedimento` — o template quebra e vira mensagem genérica.
+**Mudou:** isso NÃO é o modelo chamando `schedule_followup` — `_agendar_recall_se_configurado()`
+(tools.py) cria automaticamente dentro de `book_appointment`, sempre que o tenant tem
+`procedimentos_recall` configurado (JSONB `{"nome do procedimento": dias}`) e o serviço agendado bate
+com alguma regra.
+**Aprova se:** ao fechar um agendamento de um serviço que está em `procedimentos_recall` do tenant,
+nasce uma linha em `followup_jobs` com `job_type="recall_procedimento"`, `scheduled_at` coerente e
+`payload.procedimento` preenchido. **Se o tenant de teste não tiver `procedimentos_recall`
+configurado, esse cenário não dispara — não é bug, é ausência de config.**
 
 ## 24. Confirmação de presença 1 dia antes
 **Contexto:** o template de `appointment_reminder` já pergunta "Você vem, né?".
@@ -154,13 +162,12 @@ normalmente pelo agente (ex: lead responde "vou sim" ou "não vou poder") sem qu
 
 Testar isso agora só gera falha por ausência de feature, não por bug:
 
-- **Cancelamento / remarcação pelo lead** — nenhuma tool implementada
-- **Lembrete 2 horas antes** — impossível hoje: `schedule_followup.days` é **inteiro em dias**, não
-  aceita horas. Precisaria mudar o schema pra aceitar minutos/horas
+- **Lembrete 2 horas antes** — impossível hoje: tanto `schedule_followup.days` quanto o novo lembrete
+  automático de agendamento (`_agendar_lembrete_agendamento`) trabalham em **dias inteiros**, não
+  aceitam horas. Precisaria mudar o schema pra aceitar minutos/horas
 - **Reativação de inativos (12 meses sem retorno)** — `schedule_followup` só agenda de dentro de uma
   conversa. Não existe rotina que varra a tabela `leads` procurando quem sumiu
 - **Aniversário / campanha** — não coletamos data de nascimento em lugar nenhum do fluxo
-- `check_availability` batendo em agenda real (ainda é mock)
 - **Templates HSM aprovados no Meta Business** — bloqueio dominante: toda mensagem proativa fora da
   janela de 24h do WhatsApp exige template aprovado. Lembrete, recall, pós-venda, reativação e
   aniversário dependem disso pra funcionar em produção, por melhor que esteja o código
