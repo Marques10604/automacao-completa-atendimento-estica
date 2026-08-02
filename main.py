@@ -682,7 +682,9 @@ def _set_escalado(tenant_name: str, phone: str, valor: bool) -> dict:
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant não encontrado")
     sb = mem.get_client()
-    sb.table("leads").update({"escalado": valor}).eq("tenant_id", tenant["id"]).eq("phone", phone).execute()
+    result = sb.table("leads").update({"escalado": valor}).eq("tenant_id", tenant["id"]).eq("phone", phone).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail=f"Lead com phone={phone} não encontrado para tenant {tenant_name}")
     return {"status": "ok", "phone": phone, "escalado": valor}
 
 
