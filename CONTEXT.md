@@ -400,6 +400,36 @@ Isso é a "tela" prevista na decisão `docs/superpowers/decisoes/2026-07-22-cata
 
 ---
 
+## Status em andamento — Dashboard real + botão de desescalar (pausado em 2026-08-02, retomar daqui)
+
+**Objetivo:** o dashboard do cliente (repositório separado, feito no Lovable) hoje é 100% mock. Conectar dados reais do backend + adicionar botão pra atendente devolver um lead escalado pra IA.
+
+**Repositório do dashboard (fonte de verdade, NÃO é este repo):** `https://github.com/Marques10604/aesthetic-dashboard-ai.git` — usuário não quer nada conectado ao Lovable, só usa ele pra gerar o front e depois trabalha 100% via GitHub. Stack: TanStack Start (React 19 + Vite + SSR real, tem `server.ts`/`start.ts`), shadcn/ui, dados hoje 100% em `src/lib/mock-leads.ts`.
+
+**Já feito:**
+- Spec completa escrita e commitada neste repo: `docs/superpowers/specs/2026-08-02-dashboard-integracao-real-desescalar-design.md` (commit `c21988b`) — leia ela inteira antes de continuar, tem a arquitetura completa.
+- Decisões fechadas com o usuário (via brainstorming): single-tenant por enquanto (sem login), todas as chamadas ao backend acontecem só no servidor SSR do dashboard (a `x-admin-key` nunca chega no navegador), sem botão de escalar manual (só desescalar — escalar continua automático via `_registrar_falha_e_escalar` e a tool `escalate_to_human`), 5º KPI novo "Taxa de resolução automática" (containment rate) validado por pesquisa de mercado, sininho do topbar passa a mostrar contagem real de leads escalados.
+- 6 tasks quebradas (podem não persistir entre sessões — a lista abaixo é a fonte de verdade):
+  1. Criar `src/lib/backend-client.ts` (server-only: `getLeads()`, `desescalarLead(phone)`, lê `BACKEND_URL`/`ADMIN_API_KEY`/`TENANT_SLUG` do `process.env`)
+  2. Criar `src/lib/dashboard-metrics.ts` (funções puras: `Lead[]` → KPIs, série 30 dias, top serviços, contagem de escalados)
+  3. Loader server-side em `src/routes/index.tsx` chamando os dois acima
+  4. `kpi-cards.tsx`, `topbar.tsx`, `leads-chart.tsx`, `top-services.tsx`, `highlight-band.tsx` passam a receber dados via props em vez de importar `mock-leads` direto
+  5. `leads-table.tsx`: badge "Aguardando humano" + botão "Devolver pra IA" nas linhas com `escalado=true`
+  6. `.env` local do dashboard + `bun dev` pra visualizar
+
+**Nenhuma dessas 6 tasks foi implementada ainda** — paramos na fase de investigação/planejamento, nenhum código do dashboard foi escrito ou commitado no repo `aesthetic-dashboard-ai`. O clone local ficou numa pasta de scratchpad temporária (não persiste entre sessões) — é só re-clonar, nada foi perdido porque nada foi alterado lá ainda.
+
+**Descoberta importante que travou o progresso (resolver primeiro ao retomar):** o KPI "Recuperado por follow-up automático" (valor em R$) do mock **não tem de onde vir hoje**. `_generate_payment_link()` (`app/agent/tools.py:604`) manda o valor pro Asaas mas não persiste esse valor em nenhuma tabela ligada ao lead — só retorna `payment_url`/`payment_id`. `payment_confirm()` (`main.py:710`) também não grava valor. Precisa decidir: (a) tirar esse KPI do V1, (b) adicionar coluna pra persistir o valor quando o link é gerado/confirmado, ou (c) alguma aproximação. Perguntar ao usuário antes de continuar.
+
+**Dados reais confirmados em produção (Railway) pra usar no `.env` local:**
+- `BACKEND_URL=https://automacao-completa-atendimento-estica-production.up.railway.app`
+- Tenants ativos: `lumina` (Clínica Lumina), `minha-clinica` (Clinica Sorriso), `bia` (BIN Master IA) — usar `TENANT_SLUG=lumina` pro teste local (tem leads reais, ainda que de teste — todos com `escalado=false` até agora)
+- `ADMIN_API_KEY` já está no `.env` deste projeto (backend) e foi validado batendo em `/tenants` e `/leads/lumina` com sucesso
+
+**Próximo passo ao retomar:** decidir o KPI de "recuperado" com o usuário, depois seguir as 6 tasks em ordem.
+
+---
+
 ## Como trabalhar neste projeto
 
 1. Leia este arquivo (`CONTEXT.md`) **inteiro** antes de qualquer tarefa
