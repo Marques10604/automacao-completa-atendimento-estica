@@ -65,7 +65,11 @@ async def escalar_por_falhas(tenant: dict, lead_id: str, phone: str, motivo: str
     sb = mem.get_client()
     try:
         await asyncio.to_thread(
-            lambda: sb.table("leads").update({"escalado": True}).eq("id", lead_id).execute()
+            lambda: sb.table("leads").update({
+                "escalado": True,
+                "motivo_escalonamento": motivo,
+                "escalado_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", lead_id).execute()
         )
     except Exception as e:
         logger.error("Falha ao marcar lead %s como escalado por falhas técnicas: %s", lead_id, e)

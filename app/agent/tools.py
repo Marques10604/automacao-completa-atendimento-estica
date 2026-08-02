@@ -642,9 +642,12 @@ async def _escalate_to_human(inp: dict, tenant: dict, phone: str) -> dict:
     logger = logging.getLogger(__name__)
 
     sb = mem.get_client()
-    sb.table("leads").update({"escalado": True}).eq("id", inp["lead_id"]).execute()
-
     motivo = inp.get("motivo", "sem motivo informado")
+    sb.table("leads").update({
+        "escalado": True,
+        "motivo_escalonamento": motivo,
+        "escalado_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", inp["lead_id"]).execute()
     staff_phone = tenant.get("staff_phone")
     notificado = False
     if staff_phone:
