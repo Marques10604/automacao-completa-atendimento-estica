@@ -57,54 +57,62 @@ async def _agendar_resgate_silencio(
     update_lead_status, escalate_to_human) escrevem direto no banco sem atualizar
     esse dict, então confiar nele aqui poderia agendar (ou deixar de cancelar) com
     base num estágio que já mudou.
+
+    Best-effort: roda depois que a resposta ao lead já foi computada (e às vezes já
+    persistida via mem.save_message). Qualquer falha aqui (rede, erro transiente do
+    Supabase) é logada e engolida — nunca deve derrubar o return do chamador nem virar
+    um "erro interno" pro lead que já recebeu uma resposta válida.
     """
-    sb = mem.get_client()
+    try:
+        sb = mem.get_client()
 
-    await asyncio.to_thread(
-        lambda: sb.table("followup_jobs")
-            .update({"status": "cancelled"})
-            .eq("lead_id", lead_id)
-            .eq("job_type", "resgate_silencio")
-            .eq("status", "pending")
-            .execute()
-    )
+        await asyncio.to_thread(
+            lambda: sb.table("followup_jobs")
+                .update({"status": "cancelled"})
+                .eq("lead_id", lead_id)
+                .eq("job_type", "resgate_silencio")
+                .eq("status", "pending")
+                .execute()
+        )
 
-    fresh = await asyncio.to_thread(
-        lambda: sb.table("leads").select("stage, escalado").eq("id", lead_id).limit(1).execute()
-    )
-    if not fresh.data:
-        return
-    stage = fresh.data[0].get("stage")
-    escalado = fresh.data[0].get("escalado")
-    if stage not in ("novo", "qualificado") or escalado:
-        return
+        fresh = await asyncio.to_thread(
+            lambda: sb.table("leads").select("stage, escalado").eq("id", lead_id).limit(1).execute()
+        )
+        if not fresh.data:
+            return
+        stage = fresh.data[0].get("stage")
+        escalado = fresh.data[0].get("escalado")
+        if stage not in ("novo", "qualificado") or escalado:
+            return
 
-    outro_pendente = await asyncio.to_thread(
-        lambda: sb.table("followup_jobs")
-            .select("id")
-            .eq("lead_id", lead_id)
-            .eq("status", "pending")
-            .neq("job_type", "resgate_silencio")
-            .limit(1)
-            .execute()
-    )
-    if outro_pendente.data:
-        return
+        outro_pendente = await asyncio.to_thread(
+            lambda: sb.table("followup_jobs")
+                .select("id")
+                .eq("lead_id", lead_id)
+                .eq("status", "pending")
+                .neq("job_type", "resgate_silencio")
+                .limit(1)
+                .execute()
+        )
+        if outro_pendente.data:
+            return
 
-    agora = datetime.now(timezone.utc)
-    scheduled_at = (agora + timedelta(hours=3)).isoformat()
-    await asyncio.to_thread(
-        lambda: sb.table("followup_jobs").insert({
-            "lead_id":      lead_id,
-            "tenant_id":    tenant_id,
-            "channel":      canal,
-            "phone":        phone,
-            "ig_user_id":   ig_user_id,
-            "job_type":     "resgate_silencio",
-            "scheduled_at": scheduled_at,
-            "payload":      {"tentativa": 1, "last_msg_at_snapshot": agora.isoformat()},
-        }).execute()
-    )
+        agora = datetime.now(timezone.utc)
+        scheduled_at = (agora + timedelta(hours=3)).isoformat()
+        await asyncio.to_thread(
+            lambda: sb.table("followup_jobs").insert({
+                "lead_id":      lead_id,
+                "tenant_id":    tenant_id,
+                "channel":      canal,
+                "phone":        phone,
+                "ig_user_id":   ig_user_id,
+                "job_type":     "resgate_silencio",
+                "scheduled_at": scheduled_at,
+                "payload":      {"tentativa": 1, "last_msg_at_snapshot": agora.isoformat()},
+            }).execute()
+        )
+    except Exception as e:
+        logger.error("Falha ao agendar resgate por silêncio para lead %s: %s", lead_id, e)
 
 
 async def processar_mensagem(
