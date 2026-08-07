@@ -26,25 +26,28 @@ Spec completa: `docs/superpowers/specs/2026-08-07-followup-resgate-lead-silencio
 ## Task 1: Migration — `followup_jobs.job_type` aceita `resgate_silencio`
 
 **Files:**
-- Create: `database/migration_v10.sql`
+- Create: `database/migration_v13.sql`
 
 **Interfaces:**
 - Produces: valor `'resgate_silencio'` passa a ser aceito pela constraint `followup_jobs_job_type_check` — sem isso, qualquer `INSERT` das Tasks 2 e 3 é rejeitado pelo Postgres.
 
 Contexto: `migration_v9.sql` deixou o CHECK em `('appointment_reminder', 'payment_recovery', 'pos_venda', 'recall_procedimento', 'cross_sell')`. Precisa ampliar de novo, mesmo padrão de `v3`/`v8`/`v9`.
 
-- [ ] **Step 1: Criar `database/migration_v10.sql`**
+**Correção 2026-08-07:** o plano original mandava criar `database/migration_v10.sql`, mas esse nome já existe em `master` desde antes desta spec (commit `315fea4`, "Catálogo de serviços + FAQ") — a numeração real vai até `migration_v12.sql`, nenhum deles mexe em `followup_jobs.job_type`. O próximo número livre é `13`. Sempre confira `git ls-tree -r master --name-only -- database/` antes de assumir o próximo número — não confie só num grep por conteúdo (`followup_jobs`), que não pega migrations de outros assuntos.
+
+- [ ] **Step 1: Criar `database/migration_v13.sql`**
 
 ```sql
 -- ─────────────────────────────────────────────────────────────────────────────
--- Migration v10 — Follow-up de resgate por silêncio
--- Execute no SQL Editor do Supabase DEPOIS de migration_v9.sql
+-- Migration v13 — Follow-up de resgate por silêncio
+-- Execute no SQL Editor do Supabase DEPOIS de migration_v12.sql
 -- Seguro rodar mais de uma vez; nenhum comando apaga dado.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- followup_jobs.job_type precisa aceitar 'resgate_silencio'. A migration_v9 deixou
--- o CHECK com 5 tipos; sem ampliar de novo, o INSERT feito pelo agendamento reativo
--- em processar_mensagem() (Task 2) é rejeitado pelo Postgres.
+-- o CHECK com 5 tipos (v10/v11/v12 não mexem nele); sem ampliar de novo, o INSERT
+-- feito pelo agendamento reativo em processar_mensagem() (Task 2) é rejeitado pelo
+-- Postgres.
 ALTER TABLE followup_jobs DROP CONSTRAINT IF EXISTS followup_jobs_job_type_check;
 ALTER TABLE followup_jobs ADD CONSTRAINT followup_jobs_job_type_check
     CHECK (job_type IN ('appointment_reminder', 'payment_recovery', 'pos_venda',
@@ -64,8 +67,8 @@ Ação manual (fora deste ambiente): colar o conteúdo do arquivo no SQL Editor 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add database/migration_v10.sql
-git commit -m "feat: migration v10 — job_type resgate_silencio em followup_jobs"
+git add database/migration_v13.sql
+git commit -m "feat: migration v13 — job_type resgate_silencio em followup_jobs"
 ```
 
 ---
