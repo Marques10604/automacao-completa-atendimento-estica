@@ -359,7 +359,7 @@ O scheduler roda a cada 60 segundos verificando `followup_jobs` no Supabase. Tip
 | `pos_venda` | 24h após pagamento confirmado | Fidelizar, pedir indicação, oferecer retorno |
 | `recall_procedimento` | N dias após o procedimento (config por tenant) | Trazer o lead de volta pra repetir o procedimento |
 | `cross_sell` | N dias após o procedimento (config por tenant) | Oferecer um procedimento complementar |
-| `resgate_silencio` | 3h sem resposta do lead `novo`/`qualificado`, escalonado até 3x (3h/D+1/D+3) | Reengajar lead que sumiu no meio da conversa, com mensagem gerada pelo Claude retomando o assunto — marca `frio` se não responder às 3 tentativas |
+| `resgate_silencio` | 3h sem resposta do lead cujo `stage` NÃO é `agendado`/`fechado`/`frio` (e não escalado), escalonado até 3x (3h/D+1/D+3) — exclusão em vez de allowlist porque o default do schema é `'qualificacao'`, que não está no vocabulário `novo`/`qualificado`/etc do funil | Reengajar lead que sumiu no meio da conversa, com mensagem gerada pelo Claude retomando o assunto — marca `frio` se não responder às 3 tentativas |
 
 Estado 100% no Supabase — reinicializações do Railway não perdem nenhum job. Spec do `resgate_silencio`: `docs/superpowers/specs/2026-08-07-followup-resgate-lead-silencioso-design.md`.
 

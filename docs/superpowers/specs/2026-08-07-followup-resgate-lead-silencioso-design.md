@@ -24,7 +24,8 @@ Esta spec cobre um novo `job_type`, `resgate_silencio`, que detecta esse silênc
 1. **Threshold de silêncio: 3 horas.** Depois de 3h sem mensagem do lead, considera abandono e dispara a primeira tentativa de resgate.
 2. **3 tentativas, escalonadas: 3h → D+1 → D+3.** Cada tentativa só é agendada depois que a anterior foi enviada com sucesso (e o lead continuou em silêncio).
 3. **Depois da 3ª tentativa sem resposta, o lead vira `status='frio'`** automaticamente — para de tentar de vez.
-4. **Só se aplica a leads `novo` ou `qualificado`.** `agendado` já tem `appointment_reminder` cobrindo; `fechado`/`frio` são estados finais, não fazem sentido pra esse fluxo.
+4. **Se aplica a qualquer lead cujo `stage` não seja `agendado`, `fechado` ou `frio`** (e que não esteja `escalado`). `agendado` já tem `appointment_reminder` cobrindo; `fechado`/`frio` são estados finais, não fazem sentido pra esse fluxo.
+   **Correção pós-revisão final (2026-08-07):** a versão original desta decisão dizia "só se aplica a leads `novo` ou `qualificado`" (allowlist), e a implementação inicial replicou isso literalmente. Mas `database/schema.sql` define `leads.stage TEXT NOT NULL DEFAULT 'qualificacao'` — note: `'qualificacao'`, string diferente de `'qualificado'` — e `mem.get_or_create_lead()` insere o lead novo só com esse default; o vocabulário do funil (`novo`/`qualificado`/`agendado`/...) só passa a valer depois que o modelo chama a tool `update_lead_status`. Resultado: a allowlist excluía silenciosamente todo lead que sumisse **antes** de qualquer tool call — exatamente o cenário-título desta spec ("perguntou preço e sumiu"). A lógica correta é uma lista de exclusão: dispara pra qualquer `stage` que não seja `agendado`/`fechado`/`frio`, cobrindo o default `'qualificacao'` de graça.
 5. **Não duplica com outro follow-up já pendente.** Se o lead já tem um `payment_recovery` (ou qualquer outro `job_type`) pendente, o `resgate_silencio` não é agendado — evita duas mensagens de reengajamento diferentes chegando juntas.
 6. **Mensagem gerada pelo Claude, não template fixo.** Puxa o histórico da conversa e escreve algo personalizado (ex: "vi que você tava interessada no Botox — ainda quer que eu veja um horário?"), mais alinhado com a narrativa de "vendedor de alta performance" do que um texto genérico repetido. Tom escala por tentativa: 1ª leve ("ainda por aí?"), 2ª reforça valor/oferece horário, 3ª última tentativa, direta mas sem pressão.
 7. **Agendamento reativo, não por varredura periódica.** O "relógio" de silêncio é resetado a cada mensagem recebida do lead, dentro do próprio fluxo que já processa a mensagem — sem job de varredura novo rodando em paralelo.
@@ -47,7 +48,7 @@ processar_mensagem() (app/agent/claude_client.py)
       │
       ▼ (fim do turno)
 1. Cancela followup_jobs pendentes job_type='resgate_silencio' desse lead
-2. Se status final ∈ {novo, qualificado} E escalado=false E
+2. Se status final ∉ {agendado, fechado, frio} E escalado=false E
    sem outro followup_job pendente de outro tipo:
       insere resgate_silencio tentativa=1, scheduled_at = agora + 3h
       │

@@ -63,9 +63,25 @@ async def _gerar_mensagem_resgate(tenant: dict, historico: list[dict], tentativa
         f"foi dito. {tom} Nunca invente informação que não esteja no histórico. "
         "Responda só com o texto da mensagem, sem aspas e sem explicação."
     )
-    mensagens_api = [{"role": m["role"], "content": m["content"]} for m in historico] or [
-        {"role": "user", "content": "(sem histórico disponível)"}
-    ]
+    mensagens_api = [{"role": m["role"], "content": m["content"]} for m in historico]
+
+    # A janela devolvida por mem.get_messages() é limitada (últimas 20) — numa conversa
+    # mais longa ela pode abrir com uma mensagem "assistant", e a API do Claude exige que
+    # a PRIMEIRA mensagem do array seja sempre "user" (400 caso contrário).
+    while mensagens_api and mensagens_api[0]["role"] == "assistant":
+        mensagens_api.pop(0)
+
+    # Cenário central deste feature: o lead sumiu logo depois da resposta do agente, então
+    # o histórico termina em "assistant". Um array cujo ÚLTIMO papel é "assistant" também é
+    # rejeitado com 400 pela API (não é um "continue essa fala" — é inválido de fato) — e
+    # como a chamada abaixo está num try/except amplo, isso falhava silenciosamente 100% das
+    # vezes nesse cenário, sempre caindo no fallback fixo. Sintetiza um turno "user" final
+    # (e também cobre o caso de histórico vazio) pra garantir que o array sempre feche certo.
+    if not mensagens_api or mensagens_api[-1]["role"] == "assistant":
+        mensagens_api.append({
+            "role": "user",
+            "content": "(O lead parou de responder desde então. Escreva agora a mensagem de retomada.)",
+        })
 
     try:
         resposta = await _anthropic_client.messages.create(
@@ -92,7 +108,10 @@ async def _executar_resgate_silencio(job: dict, sb, tenant: dict) -> None:
         lambda: sb.table("leads").select("stage, escalado").eq("id", lead_id).limit(1).execute()
     )
     lead_row = (lead_result.data or [{}])[0]
-    if lead_row.get("escalado") or lead_row.get("stage") not in ("novo", "qualificado"):
+    # Exclusão em vez de allowlist — ver mesmo motivo em _agendar_resgate_silencio()
+    # (app/agent/claude_client.py): o default do schema é 'qualificacao', que uma
+    # allowlist ("novo", "qualificado") não cobria.
+    if lead_row.get("escalado") or lead_row.get("stage") in ("agendado", "fechado", "frio"):
         await asyncio.to_thread(
             lambda: sb.table("followup_jobs").update({"status": "cancelled"}).eq("id", job["id"]).execute()
         )
@@ -130,6 +149,12 @@ async def _executar_resgate_silencio(job: dict, sb, tenant: dict) -> None:
         text=text,
         tenant=tenant,
     )
+
+    # Persiste a mensagem enviada na história da conversa: sem isso, a tentativa seguinte
+    # via _gerar_mensagem_resgate() via o mesmo histórico de novo (não sabia que já tinha
+    # mandado um resgate), e a resposta eventual do lead ficava numa conversa com um buraco
+    # (faltando a mensagem do assistant que ele está respondendo).
+    mem.save_message(job["tenant_id"], identifier, "assistant", text)
 
     await asyncio.to_thread(
         lambda: sb.table("followup_jobs").update({

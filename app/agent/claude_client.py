@@ -48,7 +48,9 @@ async def _agendar_resgate_silencio(
 ) -> None:
     """Reagenda o resgate por silêncio a cada mensagem do lead: cancela qualquer
     tentativa pendente (o "relógio" reseta a cada mensagem recebida) e agenda uma
-    tentativa 1 nova pra daqui 3h — só se o lead seguir em aberto (novo/qualificado),
+    tentativa 1 nova pra daqui 3h — só se o lead seguir em aberto (qualquer stage
+    exceto agendado/fechado/frio — cobre o default do schema 'qualificacao' e o
+    vocabulário do funil novo/qualificado, que só aparece depois de uma tool call),
     sem estar escalado pra humano, e sem já ter outro follow-up pendente de outro
     tipo (evita duas mensagens de reengajamento diferentes chegando juntas).
 
@@ -82,7 +84,11 @@ async def _agendar_resgate_silencio(
             return
         stage = fresh.data[0].get("stage")
         escalado = fresh.data[0].get("escalado")
-        if stage not in ("novo", "qualificado") or escalado:
+        # Exclusão em vez de allowlist: o default do schema é 'qualificacao' (não
+        # 'qualificado'), e só vira 'novo'/'qualificado'/etc depois de uma tool call
+        # explícita — uma allowlist ("novo", "qualificado") deixava de fora todo lead
+        # recém-criado que ainda não recebeu nenhuma chamada de update_lead_status.
+        if stage in ("agendado", "fechado", "frio") or escalado:
             return
 
         outro_pendente = await asyncio.to_thread(
