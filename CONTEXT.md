@@ -348,18 +348,20 @@ Implementar:
 - Leads recuperados pelo follow-up D+1
 - Vendas fechadas sem o dono tocar no celular
 
-### Follow-up D+1 — lógica de negócio
+### Follow-up — lógica de negócio
 
-O scheduler roda a cada 60 segundos verificando `followup_jobs` no Supabase.
-Três tipos de job, cada um com template diferente:
+O scheduler roda a cada 60 segundos verificando `followup_jobs` no Supabase. Tipos de job, cada um com lógica própria:
 
 | Tipo | Quando dispara | Objetivo |
 |------|---------------|----------|
 | `appointment_reminder` | 24h após agendamento | Confirmar presença, reduzir no-show |
 | `payment_recovery` | 24h após link enviado sem pagamento | Recuperar lead que não pagou |
 | `pos_venda` | 24h após pagamento confirmado | Fidelizar, pedir indicação, oferecer retorno |
+| `recall_procedimento` | N dias após o procedimento (config por tenant) | Trazer o lead de volta pra repetir o procedimento |
+| `cross_sell` | N dias após o procedimento (config por tenant) | Oferecer um procedimento complementar |
+| `resgate_silencio` | 3h sem resposta do lead `novo`/`qualificado`, escalonado até 3x (3h/D+1/D+3) | Reengajar lead que sumiu no meio da conversa, com mensagem gerada pelo Claude retomando o assunto — marca `frio` se não responder às 3 tentativas |
 
-Estado 100% no Supabase — reinicializações do Railway não perdem nenhum job.
+Estado 100% no Supabase — reinicializações do Railway não perdem nenhum job. Spec do `resgate_silencio`: `docs/superpowers/specs/2026-08-07-followup-resgate-lead-silencioso-design.md`.
 
 ---
 
