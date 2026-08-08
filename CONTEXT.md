@@ -430,6 +430,32 @@ Isso é a "tela" prevista na decisão `docs/superpowers/decisoes/2026-07-22-cata
 
 ---
 
+## Status em andamento — Resgate por silêncio: acompanhar em produção (mergeado em 2026-08-08)
+
+**Objetivo:** feature já mergeada na `master` (PR #1, commit `b1b729d`) e migration `v13` rodada. Falta só observar o primeiro lead real que passar pelo fluxo completo, porque a cadeia tentativa 2→3 nunca foi confirmada ao vivo — só revisada em código (2x) — devido a um teste local ter competido com o próprio deploy de produção pelos mesmos jobs.
+
+**O que conferir quando um lead real ficar em silêncio** (query pronta pra colar no SQL Editor do Supabase):
+```sql
+select
+  l.phone,
+  l.stage,
+  l.escalado,
+  fj.payload->>'tentativa' as tentativa,
+  fj.status,
+  fj.scheduled_at,
+  fj.executed_at
+from followup_jobs fj
+join leads l on l.id = fj.lead_id
+where fj.job_type = 'resgate_silencio'
+order by fj.scheduled_at desc;
+```
+
+**Sinal de alerta:** se uma tentativa 2 ou 3 ficar `failed` (ou nunca aparecer), é a limitação conhecida e já documentada na spec (`docs/superpowers/specs/2026-08-07-followup-resgate-lead-silencioso-design.md`, achado I2 do review final) — as tentativas D+1/D+3 caem fora da janela de 24h de mensagem livre do WhatsApp/Instagram, e o Meta pode rejeitar o envio silenciosamente. Não é um bug de lógica, é uma limitação de plataforma ainda não resolvida (precisaria de template HSM aprovado pra mensagem business-initiated fora da janela).
+
+**Próximo passo ao retomar:** rodar a query acima, ver se tentativa 1 dispara certo (deve funcionar igual ao teste manual já confirmado) e se 2/3 completam ou travam.
+
+---
+
 ## Como trabalhar neste projeto
 
 1. Leia este arquivo (`CONTEXT.md`) **inteiro** antes de qualquer tarefa
